@@ -3,13 +3,25 @@
 #include <opencv2/imgproc.hpp>
 
 #include <cmath>
+#include <stdexcept>
+#include <string>
 #include <vector>
+
+#ifdef SMARTHOME_VISION_WITH_OPENVINO
+#include "smarthome_vision/openvino_detector.hpp"
+#endif
+
+#ifdef SMARTHOME_VISION_WITH_TENSORRT
+#include "smarthome_vision/trt_detector.hpp"
+#endif
 
 namespace smarthome_vision
 {
 
 Detector::Detector(
+  const std::string & backend,
   const std::string & engine_path,
+  const std::string & openvino_device,
   int input_width,
   int input_height,
   float conf_thres,
@@ -18,14 +30,35 @@ Detector::Detector(
   bool use_cuda_preprocess)
 : use_cuda_preprocess_(use_cuda_preprocess)
 {
-  trt_detector_ = std::make_unique<TRTDetector>(
-    engine_path,
-    input_width,
-    input_height,
-    conf_thres,
-    score_thres,
-    output_keypoints,
-    use_cuda_preprocess_);
+  if (backend == "openvino") {
+#ifdef SMARTHOME_VISION_WITH_OPENVINO
+    backend_ = std::make_unique<OpenVINODetector>(
+      engine_path,
+      openvino_device.empty() ? "CPU" : openvino_device,
+      input_width,
+      input_height,
+      conf_thres,
+      score_thres,
+      output_keypoints);
+#else
+    throw std::runtime_error("OpenVINO backend was requested but it was not built");
+#endif
+  } else if (backend == "tensorrt") {
+#ifdef SMARTHOME_VISION_WITH_TENSORRT
+    backend_ = std::make_unique<TRTDetector>(
+      engine_path,
+      input_width,
+      input_height,
+      conf_thres,
+      score_thres,
+      output_keypoints,
+      use_cuda_preprocess_);
+#else
+    throw std::runtime_error("TensorRT backend was requested but it was not built");
+#endif
+  } else {
+    throw std::runtime_error("unknown inference backend: " + backend);
+  }
 }
 
 // Keypoint order is expected to be TL, TR, BR, BL.
@@ -83,11 +116,11 @@ bool Detector::keypoints_valid(
 std::vector<Detection> Detector::infer(const cv::Mat & image)
 {
   std::vector<Detection> out;
-  if (!trt_detector_) {
+  if (!backend_) {
     return out;
   }
 
-  const std::vector<RawPrediction> preds = trt_detector_->infer(image);
+  const std::vector<RawPrediction> preds = backend_->infer(image);
 
   for (const auto & pred : preds) {
     if (pred.bbox.width <= 0.0f || pred.bbox.height <= 0.0f) {

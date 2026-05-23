@@ -332,7 +332,9 @@ public:
     declare_parameter<std::string>("gimbal_mode_topic", "gimbal_mode");
 
     declare_parameter<bool>("show_debug", true);
-    declare_parameter<bool>("use_cuda_preprocess", true);
+    declare_parameter<std::string>("inference_backend", "openvino");
+    declare_parameter<std::string>("openvino_device", "CPU");
+    declare_parameter<bool>("use_cuda_preprocess", false);
 
     declare_parameter<bool>("use_test_mode", false);
     declare_parameter<int>("test_mode", 0);
@@ -347,6 +349,7 @@ public:
     declare_parameter<int>("object_input_height", 640);
     declare_parameter<double>("object_conf_threshold", 0.25);
     declare_parameter<double>("object_score_threshold", 0.25);
+    declare_parameter<std::string>("object_model_path", "");
     declare_parameter<std::string>("object_engine_path", "");
     declare_parameter<bool>("object_output_keypoints", false);
 
@@ -354,6 +357,7 @@ public:
     declare_parameter<int>("qr_input_height", 640);
     declare_parameter<double>("qr_conf_threshold", 0.25);
     declare_parameter<double>("qr_score_threshold", 0.25);
+    declare_parameter<std::string>("qr_model_path", "");
     declare_parameter<std::string>("qr_engine_path", "");
     declare_parameter<bool>("qr_output_keypoints", true);
 
@@ -415,8 +419,22 @@ public:
     qr_pose_solver_->set_camera(cam);
     qr_pose_solver_->set_class_size_map(buildSquareSizeMap(qr_model_class_ids_, qr_size));
 
+    const std::string backend = get_parameter("inference_backend").as_string();
+    const std::string openvino_device = get_parameter("openvino_device").as_string();
+    std::string object_model_path = get_parameter("object_model_path").as_string();
+    std::string qr_model_path = get_parameter("qr_model_path").as_string();
+
+    if (object_model_path.empty() && backend == "tensorrt") {
+      object_model_path = get_parameter("object_engine_path").as_string();
+    }
+    if (qr_model_path.empty() && backend == "tensorrt") {
+      qr_model_path = get_parameter("qr_engine_path").as_string();
+    }
+
     object_detector_ = std::make_unique<Detector>(
-      get_parameter("object_engine_path").as_string(),
+      backend,
+      object_model_path,
+      openvino_device,
       get_parameter("object_input_width").as_int(),
       get_parameter("object_input_height").as_int(),
       static_cast<float>(get_parameter("object_conf_threshold").as_double()),
@@ -425,13 +443,20 @@ public:
       get_parameter("use_cuda_preprocess").as_bool());
 
     qr_detector_ = std::make_unique<Detector>(
-      get_parameter("qr_engine_path").as_string(),
+      backend,
+      qr_model_path,
+      openvino_device,
       get_parameter("qr_input_width").as_int(),
       get_parameter("qr_input_height").as_int(),
       static_cast<float>(get_parameter("qr_conf_threshold").as_double()),
       static_cast<float>(get_parameter("qr_score_threshold").as_double()),
       get_parameter("qr_output_keypoints").as_bool(),
       get_parameter("use_cuda_preprocess").as_bool());
+
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Vision inference backend: %s, device: %s",
+      backend.c_str(), openvino_device.c_str());
 
     gimbal_mode_sub_ = create_subscription<std_msgs::msg::UInt8>(
       get_parameter("gimbal_mode_topic").as_string(), 10,

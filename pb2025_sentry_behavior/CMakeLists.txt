@@ -23,10 +23,12 @@ rclcpp_components_register_node(action_client
 )
 
 set(plugin_libs
+  pub_nav2_goal
   send_nav2_goal
   is_target_detected
 )
 
+ament_auto_add_library(pub_nav2_goal SHARED plugins/action/pub_nav2_goal.cpp)
 ament_auto_add_library(send_nav2_goal SHARED plugins/action/send_nav2_goal.cpp)
 ament_auto_add_library(is_target_detected SHARED plugins/condition/is_target_detected.cpp)
 

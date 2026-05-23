@@ -7,12 +7,13 @@
 #include <string>
 #include <vector>
 
+#include "smarthome_vision/inference_backend.hpp"
 #include "smarthome_vision/types.hpp"
 
 namespace smarthome_vision
 {
 
-class TRTDetector
+class TRTDetector : public InferenceBackend
 {
 public:
   TRTDetector(
@@ -26,7 +27,7 @@ public:
 
   ~TRTDetector();
 
-  std::vector<RawPrediction> infer(const cv::Mat & image);
+  std::vector<RawPrediction> infer(const cv::Mat & image) override;
 
 private:
   std::vector<char> loadEngineFile(const std::string & path);

@@ -1,27 +1,41 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <root BTCPP_format="4">
   <!--
-    智能家居 / 通用决策树：
-    - 持续监听视觉 detected_target（tracking=true 且 class_id>=0 视为有目标）
-    - 通过 SendNav2Goal 向 Nav2 navigate_to_pose 发点
-    - 视觉检测与导航并行，视觉分支失败不影响导航
+    智能家居 / 通用决策树（与 rmuc_2026 同款发点方式）：
+    - PubNav2Goal 发布 goal_pose → bt_navigator 订阅并导航（非阻塞）
+    - 视觉检测与发点并行；视觉无目标也不影响发点
   -->
   <BehaviorTree ID="smarthome">
-    <ReactiveSequence name="main">
-      <Fallback name="vision_monitor">
-        <IsTargetDetected key_port="{@vision_detected_target}"
-                          timeout_ms="500"
-                          target_detected="{target_detected}"/>
-        <AlwaysSuccess/>
-      </Fallback>
-      <SendNav2Goal goal="{nav_goal}"
-                    frame_id="map"
-                    action_name="navigate_to_pose"/>
-    </ReactiveSequence>
+    <KeepRunningUntilFailure>
+      <ForceSuccess>
+        <ReactiveSequence name="main">
+          <Fallback name="vision_monitor">
+            <IsTargetDetected key_port="{@vision_detected_target}"
+                              timeout_ms="500"
+                              target_detected="{target_detected}"/>
+            <AlwaysSuccess/>
+          </Fallback>
+          <PubNav2Goal goal="{nav_goal}"
+                       frame_id="map"
+                       topic_name="goal_pose"/>
+        </ReactiveSequence>
+      </ForceSuccess>
+    </KeepRunningUntilFailure>
   </BehaviorTree>
 
-  <!-- 仅导航到单点，不挂视觉分支 -->
+  <!-- 仅导航：循环向 goal_pose 发点 -->
   <BehaviorTree ID="nav_only">
+    <KeepRunningUntilFailure>
+      <ForceSuccess>
+        <PubNav2Goal goal="{nav_goal}"
+                     frame_id="map"
+                     topic_name="goal_pose"/>
+      </ForceSuccess>
+    </KeepRunningUntilFailure>
+  </BehaviorTree>
+
+  <!-- 可选：直接调 navigate_to_pose Action（会阻塞直到导航结束，一般不用） -->
+  <BehaviorTree ID="nav_action">
     <SendNav2Goal goal="{nav_goal}"
                   frame_id="map"
                   action_name="navigate_to_pose"/>

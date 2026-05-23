@@ -8,6 +8,9 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(SMARTHOME_VISION_WITH_OPENVINO "Build the OpenVINO inference backend" ON)
+option(SMARTHOME_VISION_WITH_TENSORRT "Build the TensorRT inference backend" OFF)
+
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -16,39 +19,73 @@ find_package(builtin_interfaces REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(camera_info_manager REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS
+
+set(SMARTHOME_VISION_OPENCV_COMPONENTS
   core
+  calib3d
   imgproc
   highgui
-  cudaarithm
-  cudaimgproc
-  cudawarping
-)
-find_package(rosidl_default_generators REQUIRED)
-find_package(CUDAToolkit REQUIRED)
-
-find_path(TENSORRT_INCLUDE_DIR
-  NvInfer.h
-  PATHS
-    /usr/include
-    /usr/include/aarch64-linux-gnu
-    /usr/local/include
+  videoio
 )
 
-find_library(TENSORRT_LIB
-  nvinfer
-  PATHS
-    /usr/lib
-    /usr/lib/aarch64-linux-gnu
-    /usr/local/lib
-)
-
-if(NOT TENSORRT_INCLUDE_DIR)
-  message(FATAL_ERROR "NvInfer.h not found")
+if(SMARTHOME_VISION_WITH_TENSORRT)
+  list(APPEND SMARTHOME_VISION_OPENCV_COMPONENTS
+    cudaarithm
+    cudaimgproc
+    cudawarping
+  )
 endif()
 
-if(NOT TENSORRT_LIB)
-  message(FATAL_ERROR "nvinfer library not found")
+find_package(OpenCV REQUIRED COMPONENTS ${SMARTHOME_VISION_OPENCV_COMPONENTS})
+find_package(rosidl_default_generators REQUIRED)
+
+set(SMARTHOME_VISION_BACKEND_SOURCES)
+set(SMARTHOME_VISION_BACKEND_LIBS)
+set(SMARTHOME_VISION_BACKEND_INCLUDE_DIRS)
+set(SMARTHOME_VISION_BACKEND_DEFINES)
+
+if(SMARTHOME_VISION_WITH_OPENVINO)
+  find_package(OpenVINO REQUIRED)
+  list(APPEND SMARTHOME_VISION_BACKEND_SOURCES src/openvino_detector.cpp)
+  list(APPEND SMARTHOME_VISION_BACKEND_LIBS openvino::runtime)
+  list(APPEND SMARTHOME_VISION_BACKEND_DEFINES SMARTHOME_VISION_WITH_OPENVINO)
+endif()
+
+if(SMARTHOME_VISION_WITH_TENSORRT)
+  find_package(CUDAToolkit REQUIRED)
+
+  find_path(TENSORRT_INCLUDE_DIR
+    NvInfer.h
+    PATHS
+      /usr/include
+      /usr/include/aarch64-linux-gnu
+      /usr/local/include
+  )
+
+  find_library(TENSORRT_LIB
+    nvinfer
+    PATHS
+      /usr/lib
+      /usr/lib/aarch64-linux-gnu
+      /usr/local/lib
+  )
+
+  if(NOT TENSORRT_INCLUDE_DIR)
+    message(FATAL_ERROR "NvInfer.h not found")
+  endif()
+
+  if(NOT TENSORRT_LIB)
+    message(FATAL_ERROR "nvinfer library not found")
+  endif()
+
+  list(APPEND SMARTHOME_VISION_BACKEND_SOURCES src/trt_detector.cpp)
+  list(APPEND SMARTHOME_VISION_BACKEND_LIBS ${TENSORRT_LIB} CUDA::cudart)
+  list(APPEND SMARTHOME_VISION_BACKEND_INCLUDE_DIRS ${TENSORRT_INCLUDE_DIR})
+  list(APPEND SMARTHOME_VISION_BACKEND_DEFINES SMARTHOME_VISION_WITH_TENSORRT)
+endif()
+
+if(NOT SMARTHOME_VISION_WITH_OPENVINO AND NOT SMARTHOME_VISION_WITH_TENSORRT)
+  message(FATAL_ERROR "At least one inference backend must be enabled")
 endif()
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -59,14 +96,16 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 include_directories(
   include
   ${OpenCV_INCLUDE_DIRS}
-  ${TENSORRT_INCLUDE_DIR}
+  ${SMARTHOME_VISION_BACKEND_INCLUDE_DIRS}
 )
 
 add_library(${PROJECT_NAME}_core SHARED
   src/pose_solver.cpp
-  src/trt_detector.cpp
   src/detector.cpp
+  ${SMARTHOME_VISION_BACKEND_SOURCES}
 )
+
+target_compile_definitions(${PROJECT_NAME}_core PRIVATE ${SMARTHOME_VISION_BACKEND_DEFINES})
 
 ament_target_dependencies(${PROJECT_NAME}_core
   rclcpp
@@ -79,8 +118,7 @@ ament_target_dependencies(${PROJECT_NAME}_core
 
 target_link_libraries(${PROJECT_NAME}_core
   ${OpenCV_LIBS}
-  ${TENSORRT_LIB}
-  CUDA::cudart
+  ${SMARTHOME_VISION_BACKEND_LIBS}
 )
 
 add_executable(vision_node

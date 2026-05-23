@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "smarthome_vision/trt_detector.hpp"
+#include "smarthome_vision/inference_backend.hpp"
 #include "smarthome_vision/types.hpp"
 
 namespace smarthome_vision
@@ -15,7 +15,9 @@ class Detector
 {
 public:
   Detector(
+    const std::string & backend,
     const std::string & engine_path,
+    const std::string & openvino_device,
     int input_width,
     int input_height,
     float conf_thres,
@@ -39,7 +41,7 @@ private:
 
 private:
   bool use_cuda_preprocess_ = true;
-  std::unique_ptr<TRTDetector> trt_detector_;
+  std::unique_ptr<InferenceBackend> backend_;
 };
 
 }  // namespace smarthome_vision
