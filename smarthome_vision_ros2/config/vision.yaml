@@ -1,0 +1,51 @@
+smarthome_vision_node:
+  ros__parameters:
+    image_topic: "/image_raw"
+    gimbal_mode_topic: "gimbal_mode"
+
+    show_debug: true
+    use_cuda_preprocess: true
+
+    use_test_mode: true
+    test_mode: 1
+
+    use_local_camera: true
+    camera_device_id: 0
+    camera_width: 640
+    camera_height: 480
+    camera_fps: 30
+
+    camera_matrix: [
+      816.011939, 0.000000, 305.516996,
+      0.000000, 812.516912, 226.442214,
+      0.000000, 0.000000, 1.000000
+    ]
+    dist_coeffs: [-0.399955, 0.075996, 0.005002, 0.002332, 0.000000]
+
+    # Object class ids: red=0, yellow=1, green=2.
+    # class_sizes are width/height pairs in meters, in the same order.
+    class_names: [0, 1, 2]
+    class_sizes: [
+      0.083, 0.073,
+      0.060, 0.050,
+      0.083, 0.073
+    ]
+
+    object_input_width: 640
+    object_input_height: 640
+    object_conf_threshold: 0.25
+    object_score_threshold: 0.25
+    object_engine_path: "/home/nvidia4/smarthome_2026/ws/src/smarthome_vision_ros2/assets/object.engine"
+    object_output_keypoints: false
+    object_model_class_ids: [0, 1, 2]
+    object_pnp_class_ids: [0, 1]
+
+    qr_input_width: 640
+    qr_input_height: 640
+    qr_conf_threshold: 0.25
+    qr_score_threshold: 0.1
+    qr_engine_path: "/home/nvidia4/smarthome_2026/ws/src/smarthome_vision_ros2/assets/qrcode.engine"
+    qr_output_keypoints: true
+    qr_model_class_ids: [0, 1, 2, 3]
+
+    qr_size: 0.060

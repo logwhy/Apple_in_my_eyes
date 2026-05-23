@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/schema"?>
+<package format="3">
+  <name>robot_serial_comm</name>
+  <version>0.1.0</version>
+  <description>Serial communication bridge for vision and chassis control (cmd_vel).</description>
+  <maintainer email="dev@local">lf_sentry</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>smarthome_vision</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,9 @@
+robot_serial_comm:
+  ros__parameters:
+    serial_device: "/dev/gimbal"
+    baudrate: 115200
+    send_rate_hz: 200
+    cmd_vel_topic: "cmd_vel"
+    vision_topic: "detected_target"
+    gimbal_mode_topic: "gimbal_mode"
+    serial_tx_hex_topic: "serial_tx_hex"

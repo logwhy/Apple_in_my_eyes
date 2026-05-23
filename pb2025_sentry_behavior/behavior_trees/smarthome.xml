@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <!--
+    智能家居 / 通用决策树：
+    - 持续监听视觉 detected_target（tracking=true 且 class_id>=0 视为有目标）
+    - 通过 SendNav2Goal 向 Nav2 navigate_to_pose 发点
+    - 视觉检测与导航并行，视觉分支失败不影响导航
+  -->
+  <BehaviorTree ID="smarthome">
+    <ReactiveSequence name="main">
+      <Fallback name="vision_monitor">
+        <IsTargetDetected key_port="{@vision_detected_target}"
+                          timeout_ms="500"
+                          target_detected="{target_detected}"/>
+        <AlwaysSuccess/>
+      </Fallback>
+      <SendNav2Goal goal="{nav_goal}"
+                    frame_id="map"
+                    action_name="navigate_to_pose"/>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- 仅导航到单点，不挂视觉分支 -->
+  <BehaviorTree ID="nav_only">
+    <SendNav2Goal goal="{nav_goal}"
+                  frame_id="map"
+                  action_name="navigate_to_pose"/>
+  </BehaviorTree>
+
+  <!-- 仅监控视觉，不发导航 -->
+  <BehaviorTree ID="vision_only">
+    <KeepRunningUntilFailure>
+      <Sequence>
+        <IsTargetDetected key_port="{@vision_detected_target}"
+                          timeout_ms="500"/>
+        <Sleep msec="200"/>
+      </Sequence>
+    </KeepRunningUntilFailure>
+  </BehaviorTree>
+</root>

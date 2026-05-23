@@ -1,0 +1,9 @@
+builtin_interfaces/Time stamp
+uint8 mode
+bool tracking
+int32 class_id
+float32 score
+float32 x
+float32 y
+float32 z
+float32[] corners_uv
