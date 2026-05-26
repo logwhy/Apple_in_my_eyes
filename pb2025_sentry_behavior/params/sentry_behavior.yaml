@@ -18,4 +18,22 @@ pb2025_sentry_behavior_server:
 pb2025_sentry_behavior_client:
   ros__parameters:
     use_sim_time: false
-    target_tree: smarthome
+    target_tree: smart_picking
+
+smart_picking_manager:
+  ros__parameters:
+    use_sim_time: false
+    goal_topic: "goal_pose"
+    robot_command_topic: "robot_command"
+    robot_mode_topic: "robot_mode"
+    nav_status_topic: "navigate_to_pose/_action/status"
+    vision_topic: "detected_target"
+    frame_id: "map"
+    settle_ms: 1000
+    dump_settle_ms: 1000
+    command_pulse_ms: 250
+    repeat_after_pick_done: true
+    use_final_goal: true
+    final_goal: "0.0;0.0;0.0"
+    nav_goals:
+      - "2.0;1.0;0.0"

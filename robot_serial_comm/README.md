@@ -1,59 +1,81 @@
 # robot_serial_comm
 
-独立串口通信功能包：承接原 `smarthome_vision` 中的 `GimbalBridge` 逻辑，并兼容导航 `cmd_vel`。
+Serial bridge between ROS 2 and the lower controller.
 
-## 功能
+## Topics
 
-- 订阅 `cmd_vel`（与 `standard_robot_pp_ros2` 一致），将 `vx/vy/wz` 写入下发数据包
-- 订阅 `detected_target`（视觉节点输出），将识别目标写入同一数据包
-- 以固定频率（默认 200Hz）向下位机发送 **SP** 协议帧
-- 接收下位机 **VS** 模式帧，发布 `gimbal_mode` 供视觉节点读取
+| Direction | Topic | Type | Meaning |
+| --- | --- | --- | --- |
+| subscribe | `cmd_vel` | `geometry_msgs/Twist` | Chassis speed command. |
+| subscribe | `detected_target` | `smarthome_vision/DetectedTarget` | Vision target tracking state and xyz. |
+| subscribe | `robot_command` | `std_msgs/UInt8` | Upper-computer command to the lower controller. |
+| publish | `robot_mode` | `std_msgs/UInt8` | Lower-controller state reported to ROS. |
+| publish | `serial_tx_hex` | `std_msgs/String` | Debug hex dump of the outgoing serial frame. |
 
-## 协议变更
+## Upper -> Lower Frame
 
-在原有 `VisionToGimbal` 末尾、`crc16` 前增加：
+Header is `SP`. CRC is Modbus CRC16 over all bytes except the final `crc16` field.
 
 ```cpp
-struct {
-  float vx;
-  float vy;
-  float wz;
-} __attribute__((packed)) speed_vector;
+struct VisionToGimbal
+{
+  uint8_t head[2];     // 'S', 'P'
+  uint8_t command;     // UpperCommand
+  uint8_t tracking;    // 0/1
+  uint8_t class_id;    // target class, valid when tracking=1
+  float x;             // target x in camera frame, meters
+  float y;             // target y in camera frame, meters
+  float z;             // target z in camera frame, meters
+  float vx;            // chassis vx
+  float vy;            // chassis vy
+  float wz;            // chassis wz
+  uint16_t crc16;
+} __attribute__((packed));
 ```
 
-## 话题
+`command` values:
 
-| 方向 | 话题 | 类型 |
-|------|------|------|
-| 订阅 | `cmd_vel` | `geometry_msgs/Twist` |
-| 订阅 | `detected_target` | `smarthome_vision/DetectedTarget` |
-| 发布 | `gimbal_mode` | `std_msgs/UInt8` |
-| 发布 | `serial_tx_hex` | `std_msgs/String`（调试） |
+| Value | Name | Meaning |
+| --- | --- | --- |
+| 0 | `NONE` | No new command. |
+| 1 | `START_SCAN` | Arrived at waypoint; lower controller should start automatic scanning. |
+| 2 | `HOLD` | Hold robot/manipulator state. |
+| 3 | `RESUME_NAV` | Lower controller allows upper computer to continue navigation. |
+| 4 | `START_DUMP` | Arrived at the final point; lower controller should dump collected fruit. |
 
-## 启动
+When the latest received `robot_mode` is `AUTO_SCAN`, `PICKING`, or `DUMPING`, this node forces outgoing
+`vx/vy/wz` to zero before calculating CRC.
+
+## Lower -> Upper Frame
+
+Header is `VS`. CRC is Modbus CRC16 over all bytes except the final `crc16` field.
+
+```cpp
+struct GimbalToVision
+{
+  uint8_t head[2];      // 'V', 'S'
+  uint8_t robot_mode;   // LowerMode
+  uint16_t crc16;
+} __attribute__((packed));
+```
+
+`robot_mode` values:
+
+| Value | Name | Meaning |
+| --- | --- | --- |
+| 0 | `IDLE` | Idle or navigation allowed. |
+| 1 | `AUTO_SCAN` | Lower controller is scanning. Upper computer should keep the robot still. |
+| 2 | `PICKING` | Lower controller is picking. Upper computer should keep the robot still. |
+| 3 | `PICK_DONE` | Pick finished. Upper computer can request another scan or continue. |
+| 4 | `SCAN_DONE_NO_TARGET` | Scan completed and no target was found. Upper computer should go to the next waypoint. |
+| 5 | `DUMPING` | Lower controller is dumping collected fruit. Upper computer should keep the robot still. |
+| 6 | `DUMP_DONE` | Dump finished. Full smart-picking task can finish. |
+| 255 | `ERROR` | Lower-controller error. |
+
+## Launch
 
 ```bash
-# 仅通信节点
 ros2 launch robot_serial_comm robot_serial_comm.launch.py
-
-# 视觉 + 通信（vision.launch.py 已包含本节点）
-ros2 launch smarthome_vision vision.launch.py
 ```
 
-## 与导航联调
-
-导航栈 `fake_vel_transform` 最终发布 `/cmd_vel`，本节点订阅后即可驱动底盘，无需 `standard_robot_pp_ros2`。
-
-```
-Nav2 → cmd_vel_nav2_result → fake_vel_transform → cmd_vel → robot_serial_comm → 下位机
-smarthome_vision → detected_target → robot_serial_comm → 下位机
-下位机 → robot_serial_comm → gimbal_mode → smarthome_vision
-```
-
-## 参数
-
-见 `config/robot_serial_comm.yaml`：
-
-- `serial_device`：串口设备，默认 `/dev/gimbal`
-- `baudrate`：波特率，默认 `115200`
-- `send_rate_hz`：发送频率，默认 `200`
+See `config/robot_serial_comm.yaml` for serial device, baudrate, and topic names.

@@ -36,10 +36,6 @@ target_link_libraries(robot_serial_comm_node
   ${PROJECT_NAME}_core
 )
 
-rosidl_get_typesupport_target(
-  cpp_typesupport_target smarthome_vision "rosidl_typesupport_cpp")
-target_link_libraries(robot_serial_comm_node "${cpp_typesupport_target}")
-
 install(TARGETS
   ${PROJECT_NAME}_core
   robot_serial_comm_node

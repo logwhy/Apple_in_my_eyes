@@ -12,6 +12,7 @@ find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
 ament_auto_add_executable(pb2025_sentry_behavior_server src/pb2025_sentry_behavior_server.cpp)
+ament_auto_add_executable(smart_picking_manager src/smart_picking_manager.cpp)
 
 ament_auto_add_library(action_client SHARED
   src/pb2025_sentry_behavior_client.cpp

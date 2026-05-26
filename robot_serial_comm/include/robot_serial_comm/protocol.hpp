@@ -5,26 +5,40 @@
 namespace robot_serial_comm
 {
 
-enum class VisionMode : uint8_t
+enum class UpperCommand : uint8_t
 {
-  IDLE = 0,
-  DETECT_OBJECT = 1,
-  DETECT_QR = 2
+  NONE = 0,
+  START_SCAN = 1,
+  HOLD = 2,
+  RESUME_NAV = 3,
+  START_DUMP = 4
 };
 
-// 下位机 -> 上位机
+enum class LowerMode : uint8_t
+{
+  IDLE = 0,
+  AUTO_SCAN = 1,
+  PICKING = 2,
+  PICK_DONE = 3,
+  SCAN_DONE_NO_TARGET = 4,
+  DUMPING = 5,
+  DUMP_DONE = 6,
+  ERROR = 255
+};
+
+// Lower controller -> upper computer.
 struct __attribute__((packed)) GimbalToVision
 {
   uint8_t head[2] = {'V', 'S'};
-  uint8_t mode = static_cast<uint8_t>(VisionMode::IDLE);
+  uint8_t robot_mode = static_cast<uint8_t>(LowerMode::IDLE);
   uint16_t crc16 = 0;
 };
 
-// 上位机 -> 下位机（视觉目标 + 底盘速度）
+// Upper computer -> lower controller: command + vision target + chassis speed.
 struct __attribute__((packed)) VisionToGimbal
 {
   uint8_t head[2] = {'S', 'P'};
-  uint8_t mode = static_cast<uint8_t>(VisionMode::IDLE);
+  uint8_t command = static_cast<uint8_t>(UpperCommand::NONE);
   uint8_t tracking = 0;
   uint8_t class_id = 0;
   float x = 0.0f;

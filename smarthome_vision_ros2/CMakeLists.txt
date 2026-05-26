@@ -8,8 +8,12 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# NUC / 无 GPU 平台：保持 TensorRT=OFF，仅用 OpenVINO(CPU)。
+# 若 colcon 报缺 cudaarithm/cudaimgproc/cudawarping，说明曾打开过 TensorRT，需清 build 后重编。
 option(SMARTHOME_VISION_WITH_OPENVINO "Build the OpenVINO inference backend" ON)
-option(SMARTHOME_VISION_WITH_TENSORRT "Build the TensorRT inference backend" OFF)
+option(SMARTHOME_VISION_WITH_TENSORRT "Build the TensorRT inference backend (needs CUDA+TensorRT)" OFF)
+
+message(STATUS "smarthome_vision: OpenVINO=${SMARTHOME_VISION_WITH_OPENVINO}, TensorRT=${SMARTHOME_VISION_WITH_TENSORRT}")
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -36,6 +40,7 @@ if(SMARTHOME_VISION_WITH_TENSORRT)
   )
 endif()
 
+message(STATUS "smarthome_vision: OpenCV components = ${SMARTHOME_VISION_OPENCV_COMPONENTS}")
 find_package(OpenCV REQUIRED COMPONENTS ${SMARTHOME_VISION_OPENCV_COMPONENTS})
 find_package(rosidl_default_generators REQUIRED)
 

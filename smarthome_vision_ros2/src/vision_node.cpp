@@ -7,6 +7,8 @@
 #include <iomanip>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <utility>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -243,13 +245,16 @@ void drawModeBanner(
   cv::Mat & image,
   uint8_t mode,
   bool tracking,
+  bool use_mode_control,
   bool use_test_mode,
   bool use_local_camera)
 {
   std::ostringstream oss;
+  const std::string mode_source =
+    use_mode_control ? (use_test_mode ? "TEST" : "SERIAL") : "FIXED_OBJECT";
   oss << "MODE: " << modeToString(mode)
       << " | TRACK: " << (tracking ? "YES" : "NO")
-      << " | MODE_SRC: " << (use_test_mode ? "TEST" : "SERIAL")
+      << " | MODE_SRC: " << mode_source
       << " | IMG_SRC: " << (use_local_camera ? "LOCAL_CAM" : "ROS_TOPIC");
 
   const std::string text = oss.str();
@@ -282,14 +287,54 @@ struct BestTarget
   bool found = false;
   Detection det;
   PoseResult pose;
+  size_t selected_index = 0;
+  std::vector<std::pair<Detection, PoseResult>> candidates;
 };
+
+bool isBetterTarget(
+  const Detection & candidate_det,
+  const PoseResult & candidate_pose,
+  const Detection & current_det,
+  const PoseResult & current_pose,
+  int preferred_class_id,
+  bool prefer_nearest_z)
+{
+  if (preferred_class_id >= 0) {
+    const bool candidate_preferred = candidate_det.class_id == preferred_class_id;
+    const bool current_preferred = current_det.class_id == preferred_class_id;
+    if (candidate_preferred != current_preferred) {
+      return candidate_preferred;
+    }
+  }
+
+  constexpr double kZEps = 0.02;       // 2 cm deadband to reduce target jitter.
+  constexpr double kLateralEps = 0.02; // 2 cm deadband in camera coordinates.
+
+  const double candidate_z = candidate_pose.tvec[2];
+  const double current_z = current_pose.tvec[2];
+  if (prefer_nearest_z && std::fabs(candidate_z - current_z) > kZEps) {
+    return candidate_z < current_z;
+  }
+
+  const double candidate_lateral =
+    std::hypot(candidate_pose.tvec[0], candidate_pose.tvec[1]);
+  const double current_lateral =
+    std::hypot(current_pose.tvec[0], current_pose.tvec[1]);
+  if (std::fabs(candidate_lateral - current_lateral) > kLateralEps) {
+    return candidate_lateral < current_lateral;
+  }
+
+  return candidate_det.score > current_det.score;
+}
 
 BestTarget pickBestTarget(
   const cv::Mat & image,
   Detector * detector,
   const PoseSolver * pose_solver,
   const std::vector<int> & class_mapping,
-  const std::vector<int> & pnp_class_ids)
+  const std::vector<int> & pnp_class_ids,
+  int preferred_class_id,
+  bool prefer_nearest_z)
 {
   BestTarget best;
   if (detector == nullptr || pose_solver == nullptr) {
@@ -297,7 +342,6 @@ BestTarget pickBestTarget(
   }
 
   const std::vector<Detection> raw_dets = detector->infer(image);
-  float best_score = -1.0f;
 
   for (auto det : raw_dets) {
     det.class_id = remapClassId(det.class_id, class_mapping);
@@ -310,11 +354,16 @@ BestTarget pickBestTarget(
       continue;
     }
 
-    if (det.score > best_score) {
-      best_score = det.score;
+    const size_t candidate_index = best.candidates.size();
+    best.candidates.push_back({det, pose});
+
+    if (!best.found || isBetterTarget(
+        det, pose, best.det, best.pose, preferred_class_id, prefer_nearest_z))
+    {
       best.det = det;
       best.pose = pose;
       best.found = true;
+      best.selected_index = candidate_index;
     }
   }
 
@@ -336,6 +385,7 @@ public:
     declare_parameter<std::string>("openvino_device", "CPU");
     declare_parameter<bool>("use_cuda_preprocess", false);
 
+    declare_parameter<bool>("use_mode_control", false);
     declare_parameter<bool>("use_test_mode", false);
     declare_parameter<int>("test_mode", 0);
 
@@ -347,11 +397,13 @@ public:
 
     declare_parameter<int>("object_input_width", 640);
     declare_parameter<int>("object_input_height", 640);
-    declare_parameter<double>("object_conf_threshold", 0.25);
-    declare_parameter<double>("object_score_threshold", 0.25);
+    declare_parameter<double>("object_conf_threshold", 0.75);
+    declare_parameter<double>("object_score_threshold", 0.75);
     declare_parameter<std::string>("object_model_path", "");
     declare_parameter<std::string>("object_engine_path", "");
     declare_parameter<bool>("object_output_keypoints", false);
+    declare_parameter<int>("target_priority_class_id", 0);
+    declare_parameter<bool>("target_prefer_nearest_z", true);
 
     declare_parameter<int>("qr_input_width", 640);
     declare_parameter<int>("qr_input_height", 640);
@@ -383,6 +435,8 @@ public:
     camera_width_ = get_parameter("camera_width").as_int();
     camera_height_ = get_parameter("camera_height").as_int();
     camera_fps_ = get_parameter("camera_fps").as_int();
+    target_priority_class_id_ = get_parameter("target_priority_class_id").as_int();
+    target_prefer_nearest_z_ = get_parameter("target_prefer_nearest_z").as_bool();
 
     auto k = get_parameter("camera_matrix").as_double_array();
     auto d = get_parameter("dist_coeffs").as_double_array();
@@ -517,6 +571,11 @@ public:
 private:
   uint8_t getCurrentMode()
   {
+    const bool use_mode_control = get_parameter("use_mode_control").as_bool();
+    if (!use_mode_control) {
+      return static_cast<uint8_t>(VisionMode::DETECT_OBJECT);
+    }
+
     const bool use_test_mode = get_parameter("use_test_mode").as_bool();
     if (use_test_mode) {
       return static_cast<uint8_t>(get_parameter("test_mode").as_int());
@@ -570,6 +629,7 @@ private:
   void processFrame(const cv::Mat & image, const builtin_interfaces::msg::Time & stamp)
   {
     const bool use_test_mode = get_parameter("use_test_mode").as_bool();
+    const bool use_mode_control = get_parameter("use_mode_control").as_bool();
     const uint8_t mode = getCurrentMode();
 
     BestTarget best;
@@ -579,7 +639,7 @@ private:
 
       if (show_debug_) {
         cv::Mat vis = image.clone();
-        drawModeBanner(vis, mode, false, use_test_mode, use_local_camera_);
+        drawModeBanner(vis, mode, false, use_mode_control, use_test_mode, use_local_camera_);
         cv::imshow("smarthome_vision_debug", vis);
         cv::waitKey(1);
       }
@@ -592,14 +652,18 @@ private:
         object_detector_.get(),
         object_pose_solver_.get(),
         object_model_class_ids_,
-        object_pnp_class_ids_);
+        object_pnp_class_ids_,
+        target_priority_class_id_,
+        target_prefer_nearest_z_);
     } else if (mode == static_cast<uint8_t>(VisionMode::DETECT_QR)) {
       best = pickBestTarget(
         image,
         qr_detector_.get(),
         qr_pose_solver_.get(),
         qr_model_class_ids_,
-        {});
+        {},
+        -1,
+        target_prefer_nearest_z_);
     } else {
       publishEmptyResult(stamp, static_cast<uint8_t>(VisionMode::IDLE));
       return;
@@ -614,15 +678,18 @@ private:
     if (show_debug_) {
       cv::Mat vis = image.clone();
 
-      if (best.found) {
+      for (size_t i = 0; i < best.candidates.size(); ++i) {
+        const auto & candidate = best.candidates[i];
+        const bool selected = best.found && i == best.selected_index;
         drawDetectionDebug(
           vis,
-          best.det,
-          mode == static_cast<uint8_t>(VisionMode::DETECT_OBJECT) ? "OBJ" : "QR");
-        drawPoseInsideBox(vis, best.det, best.pose);
+          candidate.first,
+          selected ? "BEST" :
+          (mode == static_cast<uint8_t>(VisionMode::DETECT_OBJECT) ? "OBJ" : "QR"));
+        drawPoseInsideBox(vis, candidate.first, candidate.second);
       }
 
-      drawModeBanner(vis, mode, best.found, use_test_mode, use_local_camera_);
+      drawModeBanner(vis, mode, best.found, use_mode_control, use_test_mode, use_local_camera_);
 
       const int scale = 2;
       cv::Mat vis_big;
@@ -694,6 +761,8 @@ private:
   int camera_width_ = 640;
   int camera_height_ = 480;
   int camera_fps_ = 30;
+  int target_priority_class_id_ = 0;
+  bool target_prefer_nearest_z_ = true;
 
   std::vector<int> class_names_;
   std::vector<int> object_model_class_ids_;

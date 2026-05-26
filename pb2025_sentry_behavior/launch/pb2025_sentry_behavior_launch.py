@@ -18,6 +18,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, PushRosNamespace, SetRemap
 from launch_ros.descriptions import ParameterFile
@@ -33,6 +34,8 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     params_file = LaunchConfiguration("params_file")
     log_level = LaunchConfiguration("log_level")
+    enable_legacy_bt = LaunchConfiguration("enable_legacy_bt")
+    enable_smart_picking = LaunchConfiguration("enable_smart_picking")
 
     # Create our own temporary YAML files that include substitutions
     param_substitutions = {"use_sim_time": use_sim_time}
@@ -76,6 +79,18 @@ def generate_launch_description():
         "log_level", default_value="info", description="log level"
     )
 
+    declare_enable_legacy_bt_cmd = DeclareLaunchArgument(
+        "enable_legacy_bt",
+        default_value="false",
+        description="Start the old BehaviorTree server/client",
+    )
+
+    declare_enable_smart_picking_cmd = DeclareLaunchArgument(
+        "enable_smart_picking",
+        default_value="true",
+        description="Start smart_picking_manager",
+    )
+
     bringup_cmd_group = GroupAction(
         [
             PushRosNamespace(namespace=namespace),
@@ -88,6 +103,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
+                condition=IfCondition(enable_legacy_bt),
             ),
             Node(
                 package="pb2025_sentry_behavior",
@@ -96,6 +112,16 @@ def generate_launch_description():
                 output="screen",
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
+                condition=IfCondition(enable_legacy_bt),
+            ),
+            Node(
+                package="pb2025_sentry_behavior",
+                executable="smart_picking_manager",
+                name="smart_picking_manager",
+                output="screen",
+                parameters=[configured_params],
+                arguments=["--ros-args", "--log-level", log_level],
+                condition=IfCondition(enable_smart_picking),
             ),
         ]
     )
@@ -112,6 +138,8 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_log_level_cmd)
+    ld.add_action(declare_enable_legacy_bt_cmd)
+    ld.add_action(declare_enable_smart_picking_cmd)
 
     # Add the actions to launch the nodes
     ld.add_action(bringup_cmd_group)

@@ -8,6 +8,8 @@ smarthome_vision_node:
     openvino_device: "CPU"
     use_cuda_preprocess: false
 
+    # Competition mode uses one detector only. Do not let lower-controller mode switch vision.
+    use_mode_control: false
     use_test_mode: true
     test_mode: 1
 
@@ -35,8 +37,11 @@ smarthome_vision_node:
 
     object_input_width: 640
     object_input_height: 640
-    object_conf_threshold: 0.25
-    object_score_threshold: 0.25
+    object_conf_threshold: 0.75
+    object_score_threshold: 0.75
+    # Multi-target selection: prefer red(class 0), then nearer z, then smaller lateral x/y.
+    target_priority_class_id: 0
+    target_prefer_nearest_z: true
     # OpenVINO uses .xml/.bin IR or .onnx. TensorRT still uses object_engine_path.
     object_model_path: ""
     object_engine_path: "/home/nvidia4/smarthome_2026/ws/src/smarthome_vision_ros2/assets/object.engine"

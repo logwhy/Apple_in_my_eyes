@@ -1,29 +1,40 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <root BTCPP_format="4">
   <!--
-    智能家居 / 通用决策树（与 rmuc_2026 同款发点方式）：
-    - PubNav2Goal 发布 goal_pose → bt_navigator 订阅并导航（非阻塞）
-    - 视觉检测与发点并行；视觉无目标也不影响发点
+    智能采摘主流程现在由 smart_picking_manager 节点执行：
+    1. 逐个发布采摘点到 goal_pose。
+    2. 监听 navigate_to_pose/_action/status，status=4 后等待 settle_ms。
+    3. 发布 START_SCAN，等待下位机 AUTO_SCAN/PICKING/PICK_DONE/SCAN_DONE_NO_TARGET。
+    4. 采摘点全部完成后发布 final_goal。
+    5. 到最终点后发布 START_DUMP，等待 DUMP_DONE。
+
+    这个 XML 保留为行为树入口和兼容旧 launch 的树模型；实际比赛建议默认启动
+    smart_picking_manager，而不要让 PubNav2Goal 在 BT tick 中重复发布同一个 goal。
   -->
-  <BehaviorTree ID="smarthome">
+
+  <BehaviorTree ID="smart_picking">
     <KeepRunningUntilFailure>
       <ForceSuccess>
-        <ReactiveSequence name="main">
-          <Fallback name="vision_monitor">
-            <IsTargetDetected key_port="{@vision_detected_target}"
-                              timeout_ms="500"
-                              target_detected="{target_detected}"/>
-            <AlwaysSuccess/>
-          </Fallback>
-          <PubNav2Goal goal="{nav_goal}"
-                       frame_id="map"
-                       topic_name="goal_pose"/>
-        </ReactiveSequence>
+        <Sequence name="managed_by_smart_picking_manager">
+          <AlwaysSuccess/>
+          <Sleep msec="200"/>
+        </Sequence>
       </ForceSuccess>
     </KeepRunningUntilFailure>
   </BehaviorTree>
 
-  <!-- 仅导航：循环向 goal_pose 发点 -->
+  <BehaviorTree ID="smarthome">
+    <KeepRunningUntilFailure>
+      <ForceSuccess>
+        <Sequence name="managed_by_smart_picking_manager">
+          <AlwaysSuccess/>
+          <Sleep msec="200"/>
+        </Sequence>
+      </ForceSuccess>
+    </KeepRunningUntilFailure>
+  </BehaviorTree>
+
+  <!-- 仅导航：循环向 goal_pose 发点，主要用于单点测试。 -->
   <BehaviorTree ID="nav_only">
     <KeepRunningUntilFailure>
       <ForceSuccess>
@@ -34,14 +45,14 @@
     </KeepRunningUntilFailure>
   </BehaviorTree>
 
-  <!-- 可选：直接调 navigate_to_pose Action（会阻塞直到导航结束，一般不用） -->
+  <!-- 可选：直接调用 navigate_to_pose Action，会阻塞直到导航结束。 -->
   <BehaviorTree ID="nav_action">
     <SendNav2Goal goal="{nav_goal}"
                   frame_id="map"
                   action_name="navigate_to_pose"/>
   </BehaviorTree>
 
-  <!-- 仅监控视觉，不发导航 -->
+  <!-- 仅监控视觉，不发导航。 -->
   <BehaviorTree ID="vision_only">
     <KeepRunningUntilFailure>
       <Sequence>

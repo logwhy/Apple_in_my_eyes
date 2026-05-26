@@ -110,11 +110,16 @@ void SerialBridge::setSpeedVector(float vx, float vy, float wz)
   tx_state_.speed_vector.wz = wz;
 }
 
-void SerialBridge::setVisionTarget(
-  uint8_t mode, bool tracking, uint8_t class_id, float x, float y, float z)
+void SerialBridge::setCommand(uint8_t command)
 {
   std::lock_guard<std::mutex> lock(tx_mutex_);
-  tx_state_.mode = mode;
+  tx_state_.command = command;
+}
+
+void SerialBridge::setVisionTarget(
+  bool tracking, uint8_t class_id, float x, float y, float z)
+{
+  std::lock_guard<std::mutex> lock(tx_mutex_);
   tx_state_.tracking = tracking ? 1 : 0;
   tx_state_.class_id = class_id;
   tx_state_.x = x;
@@ -127,6 +132,18 @@ VisionToGimbal SerialBridge::buildPacketLocked() const
   VisionToGimbal packet = tx_state_;
   packet.head[0] = 'S';
   packet.head[1] = 'P';
+
+  const uint8_t robot_mode = current_robot_mode_.load();
+  if (
+    robot_mode == static_cast<uint8_t>(LowerMode::AUTO_SCAN) ||
+    robot_mode == static_cast<uint8_t>(LowerMode::PICKING) ||
+    robot_mode == static_cast<uint8_t>(LowerMode::DUMPING))
+  {
+    packet.speed_vector.vx = 0.0f;
+    packet.speed_vector.vy = 0.0f;
+    packet.speed_vector.wz = 0.0f;
+  }
+
   packet.crc16 =
     crc16_modbus(reinterpret_cast<const uint8_t *>(&packet), sizeof(packet) - 2);
   return packet;
@@ -228,7 +245,7 @@ bool SerialBridge::parseModePacket()
       crc16_modbus(reinterpret_cast<uint8_t *>(&packet), packet_size - 2);
 
     if (calc_crc == packet.crc16) {
-      current_mode_ = packet.mode;
+      current_robot_mode_.store(packet.robot_mode);
       rx_buffer_.erase(rx_buffer_.begin(), rx_buffer_.begin() + static_cast<long>(packet_size));
       return true;
     }
@@ -239,9 +256,9 @@ bool SerialBridge::parseModePacket()
   return false;
 }
 
-uint8_t SerialBridge::getMode() const
+uint8_t SerialBridge::getRobotMode() const
 {
-  return current_mode_;
+  return current_robot_mode_.load();
 }
 
 }  // namespace robot_serial_comm

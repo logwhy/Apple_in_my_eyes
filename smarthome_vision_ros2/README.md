@@ -1,9 +1,34 @@
 # smarthome_vision_ros2
 
-这是按你的要求修改后的版本：
+## NUC / 无 CUDA 平台编译
+
+报错 `Could NOT find OpenCV (missing: cudaarithm cudaimgproc cudawarping)` 时，**不是业务代码在 NUC 上用了 CUDA**，而是 CMake 打开了 **TensorRT 后端**（会连带要求 OpenCV 的 CUDA 模块）。
+
+```bash
+# 清掉旧缓存（很重要，否则 colcon 可能沿用 -DTENSORRT=ON）
+rm -rf build/smarthome_vision install/smarthome_vision
+
+colcon build --packages-select smarthome_vision \
+  --cmake-args \
+  -DSMARTHOME_VISION_WITH_TENSORRT=OFF \
+  -DSMARTHOME_VISION_WITH_OPENVINO=ON
+```
+
+运行时 `config/vision.yaml` 已默认 `inference_backend: openvino`、`openvino_device: CPU`、`use_cuda_preprocess: false`，与 NUC 匹配。
+
+| 位置 | 是否用 CUDA |
+|------|-------------|
+| `CMakeLists.txt` 仅当 `SMARTHOME_VISION_WITH_TENSORRT=ON` | 要求 OpenCV cuda* + CUDAToolkit |
+| `src/trt_detector.cpp` | TensorRT 推理 + 可选 `cv::cuda::*` 预处理 |
+| `src/openvino_detector.cpp` | **不用** CUDA |
+| `vision.yaml` `use_cuda_preprocess` | 仅 **tensorrt** 后端生效 |
+
+---
+
+Jetson / 带 TensorRT 的版本：
 
 - **统一 TensorRT 10** 推理路径
-- **OpenCV CUDA** 预处理
+- **OpenCV CUDA** 预处理（可选）
 - **双 engine** 结构
   - 关键点 engine
   - bbox engine

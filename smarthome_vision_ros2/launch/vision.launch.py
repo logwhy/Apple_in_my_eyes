@@ -51,6 +51,7 @@ def generate_launch_description():
             {
                 "inference_backend": inference_backend,
                 "openvino_device": openvino_device,
+                "use_mode_control": False,
                 "use_test_mode": True,
                 "test_mode": 1,
                 "show_debug": True

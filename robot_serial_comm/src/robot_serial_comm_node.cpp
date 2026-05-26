@@ -1,4 +1,5 @@
 #include <chrono>
+#include <algorithm>
 #include <memory>
 #include <string>
 
@@ -25,8 +26,10 @@ public:
     const std::string cmd_vel_topic = declare_parameter<std::string>("cmd_vel_topic", "cmd_vel");
     const std::string vision_topic =
       declare_parameter<std::string>("vision_topic", "detected_target");
-    const std::string gimbal_mode_topic =
-      declare_parameter<std::string>("gimbal_mode_topic", "gimbal_mode");
+    const std::string robot_command_topic =
+      declare_parameter<std::string>("robot_command_topic", "robot_command");
+    const std::string robot_mode_topic =
+      declare_parameter<std::string>("robot_mode_topic", "robot_mode");
     const std::string serial_tx_hex_topic =
       declare_parameter<std::string>("serial_tx_hex_topic", "serial_tx_hex");
 
@@ -52,10 +55,16 @@ public:
         const uint8_t class_id =
           msg->class_id < 0 ? 0 : static_cast<uint8_t>(msg->class_id);
         bridge_->setVisionTarget(
-          msg->mode, msg->tracking, class_id, msg->x, msg->y, msg->z);
+          msg->tracking, class_id, msg->x, msg->y, msg->z);
       });
 
-    gimbal_mode_pub_ = create_publisher<std_msgs::msg::UInt8>(gimbal_mode_topic, 10);
+    robot_command_sub_ = create_subscription<std_msgs::msg::UInt8>(
+      robot_command_topic, rclcpp::QoS(10),
+      [this](const std_msgs::msg::UInt8::SharedPtr msg) {
+        bridge_->setCommand(msg->data);
+      });
+
+    robot_mode_pub_ = create_publisher<std_msgs::msg::UInt8>(robot_mode_topic, 10);
     serial_tx_hex_pub_ = create_publisher<std_msgs::msg::String>(serial_tx_hex_topic, 10);
 
     const auto send_period = std::chrono::milliseconds(
@@ -68,8 +77,9 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "Subscribed cmd_vel: %s, vision: %s, publishing mode: %s",
-      cmd_vel_topic.c_str(), vision_topic.c_str(), gimbal_mode_topic.c_str());
+      "Subscribed cmd_vel: %s, vision: %s, command: %s, publishing mode: %s",
+      cmd_vel_topic.c_str(), vision_topic.c_str(), robot_command_topic.c_str(),
+      robot_mode_topic.c_str());
   }
 
 private:
@@ -97,15 +107,16 @@ private:
 
     if (bridge_->updateReceive()) {
       std_msgs::msg::UInt8 mode_msg;
-      mode_msg.data = bridge_->getMode();
-      gimbal_mode_pub_->publish(mode_msg);
+      mode_msg.data = bridge_->getRobotMode();
+      robot_mode_pub_->publish(mode_msg);
     }
   }
 
   std::unique_ptr<SerialBridge> bridge_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<smarthome_vision::msg::DetectedTarget>::SharedPtr vision_sub_;
-  rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr gimbal_mode_pub_;
+  rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr robot_command_sub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr robot_mode_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr serial_tx_hex_pub_;
   rclcpp::TimerBase::SharedPtr send_timer_;
   rclcpp::TimerBase::SharedPtr rx_timer_;
