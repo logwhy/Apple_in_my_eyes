@@ -27,6 +27,7 @@ public:
   bool sendPacket();
   bool updateReceive();
   uint8_t getRobotMode() const;
+  int lastSendErrno() const;
 
   std::string buildPacketHex() const;
 
@@ -42,9 +43,11 @@ private:
   int baudrate_ = 115200;
 
   mutable std::mutex tx_mutex_;
+  std::mutex fd_mutex_;
   VisionToGimbal tx_state_{};
 
   std::atomic<uint8_t> current_robot_mode_{static_cast<uint8_t>(LowerMode::IDLE)};
+  std::atomic<int> last_send_errno_{0};
   std::vector<uint8_t> rx_buffer_;
 };
 

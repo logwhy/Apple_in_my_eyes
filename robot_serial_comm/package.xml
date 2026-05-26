@@ -4,7 +4,7 @@
   <name>robot_serial_comm</name>
   <version>0.1.0</version>
   <description>Serial communication bridge for vision and chassis control (cmd_vel).</description>
-  <maintainer email="dev@local">lf_sentry</maintainer>
+  <maintainer email="lf_sentry@example.com">lf_sentry</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

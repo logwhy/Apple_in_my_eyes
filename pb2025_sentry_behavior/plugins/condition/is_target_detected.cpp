@@ -68,9 +68,9 @@ BT::PortsList IsTargetDetectedCondition::providedPorts()
     BT::InputPort<int>(
       "timeout_ms", 500,
       "Message older than this is treated as no target (ms)"),
-    BT::OutputPort<bool>(
-      "target_detected", false,
-      "Whether a valid vision target is currently detected"),
+   BT::OutputPort<bool>(
+       "target_detected",
+       "Whether a valid vision target is currently detected"),
   };
 }
 

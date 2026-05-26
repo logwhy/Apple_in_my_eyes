@@ -1,6 +1,7 @@
 #include "robot_serial_comm/serial_bridge.hpp"
 
 #include <fcntl.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -11,6 +12,9 @@
 #include <sstream>
 
 #include "robot_serial_comm/crc16.hpp"
+
+static_assert(sizeof(robot_serial_comm::VisionToGimbal) == 31, "VisionToGimbal must be 31 bytes");
+static_assert(sizeof(robot_serial_comm::GimbalToVision) == 5, "GimbalToVision must be 5 bytes");
 
 namespace robot_serial_comm
 {
@@ -36,6 +40,22 @@ speed_t toSpeed(int baudrate)
   }
 }
 
+bool setSerialLine(int fd, int line, bool enabled)
+{
+  int status = 0;
+  if (ioctl(fd, TIOCMGET, &status) != 0) {
+    return false;
+  }
+
+  if (enabled) {
+    status |= line;
+  } else {
+    status &= ~line;
+  }
+
+  return ioctl(fd, TIOCMSET, &status) == 0;
+}
+
 }  // namespace
 
 SerialBridge::SerialBridge(const std::string & device, int baudrate)
@@ -51,7 +71,7 @@ SerialBridge::~SerialBridge()
 
 bool SerialBridge::openPort()
 {
-  fd_ = open(device_.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
+  fd_ = open(device_.c_str(), O_RDWR | O_NOCTTY);
   if (fd_ < 0) {
     std::cerr << "[SerialBridge] failed to open " << device_ << std::endl;
     return false;
@@ -79,12 +99,29 @@ bool SerialBridge::openPort()
   tty.c_cflag &= ~(PARENB | PARODD);
   tty.c_cflag &= ~CSTOPB;
   tty.c_cflag &= ~CRTSCTS;
+  tty.c_cflag &= ~HUPCL;
 
   if (tcsetattr(fd_, TCSANOW, &tty) != 0) {
     std::cerr << "[SerialBridge] tcsetattr failed" << std::endl;
     closePort();
     return false;
   }
+
+  tcflush(fd_, TCIOFLUSH);
+
+  // STM32 USB CDC often ignores TX until DTR is asserted (matches pyserial dtr=True).
+  if (!setSerialLine(fd_, TIOCM_DTR, true)) {
+    std::cerr << "[SerialBridge] failed to assert DTR on " << device_ << std::endl;
+  }
+  if (!setSerialLine(fd_, TIOCM_RTS, false)) {
+    std::cerr << "[SerialBridge] failed to deassert RTS on " << device_ << std::endl;
+  }
+
+  // Allow MCU USB stack to settle after open/DTR (pyserial also resets buffers first).
+  usleep(100000);
+
+  std::cerr << "[SerialBridge] ready on " << device_ << " (DTR on, SP frame "
+            << sizeof(VisionToGimbal) << " bytes)" << std::endl;
 
   return true;
 }
@@ -183,8 +220,30 @@ bool SerialBridge::sendPacket()
     packet = buildPacketLocked();
   }
 
-  const ssize_t n = write(fd_, &packet, sizeof(packet));
-  return n == static_cast<ssize_t>(sizeof(packet));
+  std::lock_guard<std::mutex> fd_lock(fd_mutex_);
+
+  const auto packet_size = static_cast<ssize_t>(sizeof(packet));
+  ssize_t total_written = 0;
+  const auto * bytes = reinterpret_cast<const uint8_t *>(&packet);
+
+  while (total_written < packet_size) {
+    const ssize_t n = write(fd_, bytes + total_written, packet_size - total_written);
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      last_send_errno_.store(errno);
+      return false;
+    }
+    if (n == 0) {
+      last_send_errno_.store(EIO);
+      return false;
+    }
+    total_written += n;
+  }
+
+  last_send_errno_.store(0);
+  return true;
 }
 
 bool SerialBridge::updateReceive()
@@ -192,6 +251,8 @@ bool SerialBridge::updateReceive()
   if (!isOpened()) {
     return false;
   }
+
+  std::lock_guard<std::mutex> fd_lock(fd_mutex_);
 
   uint8_t temp[64];
   const ssize_t n = read(fd_, temp, sizeof(temp));
@@ -259,6 +320,11 @@ bool SerialBridge::parseModePacket()
 uint8_t SerialBridge::getRobotMode() const
 {
   return current_robot_mode_.load();
+}
+
+int SerialBridge::lastSendErrno() const
+{
+  return last_send_errno_.load();
 }
 
 }  // namespace robot_serial_comm

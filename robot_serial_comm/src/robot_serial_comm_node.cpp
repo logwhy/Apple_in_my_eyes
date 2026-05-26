@@ -1,5 +1,7 @@
 #include <chrono>
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -90,13 +92,22 @@ private:
     }
 
     if (!bridge_->sendPacket()) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Serial send failed");
+      const int send_errno = bridge_->lastSendErrno();
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000, "Serial send failed: %s",
+        send_errno != 0 ? std::strerror(send_errno) : "unknown");
       return;
     }
 
     std_msgs::msg::String hex_msg;
     hex_msg.data = bridge_->buildPacketHex();
     serial_tx_hex_pub_->publish(hex_msg);
+    RCLCPP_INFO_THROTTLE(
+      get_logger(),
+      *get_clock(),
+      1000,
+      "TX SP frame: %s",
+      hex_msg.data.c_str());
   }
 
   void onReceiveTimer()

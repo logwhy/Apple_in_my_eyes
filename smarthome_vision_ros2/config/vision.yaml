@@ -44,7 +44,7 @@ smarthome_vision_node:
     target_prefer_nearest_z: true
     # OpenVINO uses .xml/.bin IR or .onnx. TensorRT still uses object_engine_path.
     object_model_path: ""
-    object_engine_path: "/home/nvidia4/smarthome_2026/ws/src/smarthome_vision_ros2/assets/object.engine"
+    object_engine_path: "/home/luojiafox/Apple_in_my_eyes/src/smarthome_vision_ros2/assets/last_openvino_model/last.bin"
     object_output_keypoints: false
     object_model_class_ids: [0, 1, 2]
     object_pnp_class_ids: [0, 1]
