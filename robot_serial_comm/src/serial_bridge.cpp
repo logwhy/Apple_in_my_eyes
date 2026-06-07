@@ -71,17 +71,29 @@ SerialBridge::~SerialBridge()
 
 bool SerialBridge::openPort()
 {
-  fd_ = open(device_.c_str(), O_RDWR | O_NOCTTY);
-  if (fd_ < 0) {
+  std::lock_guard<std::mutex> fd_lock(fd_mutex_);
+  return openPortLocked();
+}
+
+bool SerialBridge::openPortLocked()
+{
+  if (fd_ >= 0) {
+    return true;
+  }
+
+  const int fd = open(device_.c_str(), O_RDWR | O_NOCTTY);
+  if (fd < 0) {
+    last_open_errno_.store(errno);
     std::cerr << "[SerialBridge] failed to open " << device_ << std::endl;
     return false;
   }
 
   struct termios tty;
   std::memset(&tty, 0, sizeof(tty));
-  if (tcgetattr(fd_, &tty) != 0) {
+  if (tcgetattr(fd, &tty) != 0) {
+    last_open_errno_.store(errno);
     std::cerr << "[SerialBridge] tcgetattr failed" << std::endl;
-    closePort();
+    close(fd);
     return false;
   }
 
@@ -101,24 +113,30 @@ bool SerialBridge::openPort()
   tty.c_cflag &= ~CRTSCTS;
   tty.c_cflag &= ~HUPCL;
 
-  if (tcsetattr(fd_, TCSANOW, &tty) != 0) {
+  if (tcsetattr(fd, TCSANOW, &tty) != 0) {
+    last_open_errno_.store(errno);
     std::cerr << "[SerialBridge] tcsetattr failed" << std::endl;
-    closePort();
+    close(fd);
     return false;
   }
 
-  tcflush(fd_, TCIOFLUSH);
+  tcflush(fd, TCIOFLUSH);
 
   // STM32 USB CDC often ignores TX until DTR is asserted (matches pyserial dtr=True).
-  if (!setSerialLine(fd_, TIOCM_DTR, true)) {
+  if (!setSerialLine(fd, TIOCM_DTR, true)) {
     std::cerr << "[SerialBridge] failed to assert DTR on " << device_ << std::endl;
   }
-  if (!setSerialLine(fd_, TIOCM_RTS, false)) {
+  if (!setSerialLine(fd, TIOCM_RTS, false)) {
     std::cerr << "[SerialBridge] failed to deassert RTS on " << device_ << std::endl;
   }
 
   // Allow MCU USB stack to settle after open/DTR (pyserial also resets buffers first).
   usleep(100000);
+
+  fd_ = fd;
+  last_open_errno_.store(0);
+  last_send_errno_.store(0);
+  rx_buffer_.clear();
 
   std::cerr << "[SerialBridge] ready on " << device_ << " (DTR on, SP frame "
             << sizeof(VisionToGimbal) << " bytes)" << std::endl;
@@ -128,15 +146,33 @@ bool SerialBridge::openPort()
 
 void SerialBridge::closePort()
 {
+  std::lock_guard<std::mutex> fd_lock(fd_mutex_);
+  closePortLocked();
+}
+
+void SerialBridge::closePortLocked()
+{
   if (fd_ >= 0) {
     close(fd_);
     fd_ = -1;
   }
+  rx_buffer_.clear();
 }
 
 bool SerialBridge::isOpened() const
 {
+  std::lock_guard<std::mutex> fd_lock(fd_mutex_);
   return fd_ >= 0;
+}
+
+bool SerialBridge::reconnect()
+{
+  std::lock_guard<std::mutex> fd_lock(fd_mutex_);
+  if (fd_ >= 0) {
+    return true;
+  }
+
+  return openPortLocked();
 }
 
 void SerialBridge::setSpeedVector(float vx, float vy, float wz)
@@ -210,10 +246,6 @@ std::string SerialBridge::buildPacketHex() const
 
 bool SerialBridge::sendPacket()
 {
-  if (!isOpened()) {
-    return false;
-  }
-
   VisionToGimbal packet;
   {
     std::lock_guard<std::mutex> lock(tx_mutex_);
@@ -221,6 +253,11 @@ bool SerialBridge::sendPacket()
   }
 
   std::lock_guard<std::mutex> fd_lock(fd_mutex_);
+
+  if (fd_ < 0) {
+    last_send_errno_.store(ENODEV);
+    return false;
+  }
 
   const auto packet_size = static_cast<ssize_t>(sizeof(packet));
   ssize_t total_written = 0;
@@ -233,10 +270,12 @@ bool SerialBridge::sendPacket()
         continue;
       }
       last_send_errno_.store(errno);
+      closePortLocked();
       return false;
     }
     if (n == 0) {
       last_send_errno_.store(EIO);
+      closePortLocked();
       return false;
     }
     total_written += n;
@@ -248,11 +287,11 @@ bool SerialBridge::sendPacket()
 
 bool SerialBridge::updateReceive()
 {
-  if (!isOpened()) {
+  std::lock_guard<std::mutex> fd_lock(fd_mutex_);
+
+  if (fd_ < 0) {
     return false;
   }
-
-  std::lock_guard<std::mutex> fd_lock(fd_mutex_);
 
   uint8_t temp[64];
   const ssize_t n = read(fd_, temp, sizeof(temp));
@@ -261,6 +300,7 @@ bool SerialBridge::updateReceive()
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       return false;
     }
+    closePortLocked();
     return false;
   }
 
@@ -325,6 +365,11 @@ uint8_t SerialBridge::getRobotMode() const
 int SerialBridge::lastSendErrno() const
 {
   return last_send_errno_.load();
+}
+
+int SerialBridge::lastOpenErrno() const
+{
+  return last_open_errno_.load();
 }
 
 }  // namespace robot_serial_comm

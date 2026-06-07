@@ -4,6 +4,8 @@ smarthome_vision_node:
     gimbal_mode_topic: "gimbal_mode"
 
     show_debug: true
+    log_debug_result: false
+    debug_view_scale: 1
     inference_backend: "openvino"
     openvino_device: "CPU"
     use_cuda_preprocess: false
@@ -20,31 +22,31 @@ smarthome_vision_node:
     camera_fps: 30
 
     camera_matrix: [
-      816.011939, 0.000000, 305.516996,
-      0.000000, 812.516912, 226.442214,
+      480.076424, 0.000000, 324.641891,
+      0.000000, 481.012310, 242.491443,
       0.000000, 0.000000, 1.000000
     ]
-    dist_coeffs: [-0.399955, 0.075996, 0.005002, 0.002332, 0.000000]
+    dist_coeffs: [-0.046451, 0.085529, 0.001981, 0.006941, 0.000000]
 
     # Object class ids: red=0, yellow=1, green=2.
     # class_sizes are width/height pairs in meters, in the same order.
     class_names: [0, 1, 2]
     class_sizes: [
-      0.083, 0.073,
+      0.045, 0.04,
       0.060, 0.050,
       0.083, 0.073
     ]
 
     object_input_width: 640
     object_input_height: 640
-    object_conf_threshold: 0.75
-    object_score_threshold: 0.75
+    object_conf_threshold: 0.5
+    object_score_threshold: 0.5
     # Multi-target selection: prefer red(class 0), then nearer z, then smaller lateral x/y.
     target_priority_class_id: 0
     target_prefer_nearest_z: true
     # OpenVINO uses .xml/.bin IR or .onnx. TensorRT still uses object_engine_path.
-    object_model_path: ""
-    object_engine_path: "/home/luojiafox/Apple_in_my_eyes/src/smarthome_vision_ros2/assets/last_openvino_model/last.bin"
+    object_model_path: "/home/luojiafox/Apple_in_my_eyes/lastm.xml"    
+    object_engine_path: ""
     object_output_keypoints: false
     object_model_class_ids: [0, 1, 2]
     object_pnp_class_ids: [0, 1]

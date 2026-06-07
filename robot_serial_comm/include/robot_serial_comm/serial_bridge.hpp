@@ -18,6 +18,7 @@ public:
   ~SerialBridge();
 
   bool isOpened() const;
+  bool reconnect();
 
   void setSpeedVector(float vx, float vy, float wz);
   void setCommand(uint8_t command);
@@ -28,13 +29,16 @@ public:
   bool updateReceive();
   uint8_t getRobotMode() const;
   int lastSendErrno() const;
+  int lastOpenErrno() const;
 
   std::string buildPacketHex() const;
 
 private:
   VisionToGimbal buildPacketLocked() const;
   bool openPort();
+  bool openPortLocked();
   void closePort();
+  void closePortLocked();
   bool parseModePacket();
 
 private:
@@ -43,11 +47,12 @@ private:
   int baudrate_ = 115200;
 
   mutable std::mutex tx_mutex_;
-  std::mutex fd_mutex_;
+  mutable std::mutex fd_mutex_;
   VisionToGimbal tx_state_{};
 
   std::atomic<uint8_t> current_robot_mode_{static_cast<uint8_t>(LowerMode::IDLE)};
   std::atomic<int> last_send_errno_{0};
+  std::atomic<int> last_open_errno_{0};
   std::vector<uint8_t> rx_buffer_;
 };
 

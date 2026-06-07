@@ -24,8 +24,8 @@ point_lio:
     runtime_pos_log_enable: False                       # Option: True
 
     common:
-      lid_topic: "/livox/lidar_192_168_1_123"
-      imu_topic: "/livox/imu_192_168_1_123"
+      lid_topic: "/livox/lidar_192_168_1_142"
+      imu_topic: "/livox/imu_192_168_1_142"
       con_frame: False                                  # True: if you need to combine several LiDAR frames into one
       con_frame_num: 1                                  # the number of frames combined
       cut_frame: False                                  # True: if you need to cut one LiDAR frame into several subframes
@@ -42,7 +42,7 @@ point_lio:
       lidar_type: 1                                     # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR
       scan_line: 4
       timestamp_unit: 3                                 # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
-      blind: 0.5
+      blind: 0.6
 
     mapping:
       imu_en: True
@@ -64,8 +64,8 @@ point_lio:
       plane_thr: 0.01                                    # 0.05, the threshold for plane criteria, the smaller, the flatter a plane
       match_s: 81.0
       ivox_grid_resolution: 0.5
-      gravity: [-0.020560257136821747, -0.7096359729766846, -0.6930065751075745]            # gravity to be aligned
-      gravity_init: [-0.020560257136821747, -0.7096359729766846, -0.6930065751075745]       # preknown gravity in the first IMU body frame, use when imu_en is False or start from a non-stationary state
+      gravity: [-0.0224036555737257, -0.0006619257619604468, 1.0005815029144287]            # gravity to be aligned
+      gravity_init: [-0.0224036555737257, -0.0006619257619604468, 1.0005815029144287]       # preknown gravity in the first IMU body frame, use when imu_en is False or start from a non-stationary state
       extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
       extrinsic_R: [ 1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -159,7 +159,7 @@ fake_vel_transform:
     input_cmd_vel_topic: "cmd_vel_nav2_result"
     output_cmd_vel_topic: "cmd_vel"
     cmd_spin_topic: "cmd_spin"
-    init_spin_speed: 3.14
+    init_spin_speed: 0.0
 
 small_gicp_relocalization:
   ros__parameters:
@@ -394,28 +394,28 @@ controller_server:
       batch_size: 2000
       
       # 速度限制
-      vx_max: 10.0
-      vy_max: 10.0
-      wz_max: 2.0
-      vx_min: -10.0
-      vy_min: -10.0
-      wz_min: -2.0
+      vx_max: 1.0
+      vy_max: 1.0
+      wz_max: 0.0
+      vx_min: -1.0
+      vy_min: -1.0
+      wz_min: -0.0
       
       # 加速度限制
-      ax_max: 10.0
-      ay_max: 10.0
-      az_max: 3.14
-      ax_min: -10.0
-      ay_min: -10.0
-      az_min: -3.14
+      ax_max: 3.0
+      ay_max: 3.0
+      az_max: 0.1
+      ax_min: -3.0
+      ay_min: -3.0
+      az_min: -0.1
       
       # 噪声参数
-      # vx_std: 0.5
-      # vy_std: 0.5
-      # wz_std: 0.3
-      vx_std: 2.0
-      vy_std: 2.0
-      wz_std: 1.0
+      vx_std: 0.5
+      vy_std: 0.5
+      wz_std: 0.05
+      # vx_std: 2.0
+      # vy_std: 2.0
+      # wz_std: 1.0
       
       # 算法参数
       iteration_count: 1
@@ -487,7 +487,7 @@ controller_server:
         cost_power: 1
         cost_weight: 100.0
         offset_from_furthest: 10 #关注路径前方更远的点
-        threshold_to_consider: 0.1 #缩小关闭距离，让路径跟随一直引导到接近目标，防止圆周运动
+        threshold_to_consider: 0.05 #缩小关闭距离，让路径跟随一直引导到接近目标，防止圆周运动
 
       PathAlignCritic: #让轨迹方向与路径对齐，高速下更平滑
         enabled: true
@@ -497,7 +497,7 @@ controller_server:
         trajectory_point_step: 4
         threshold_to_consider: 0.1 #与PathFollowCritic同步，在接近目标前持续提供方向引导
         offset_from_furthest: 3
-        use_path_orientations: false #omni机器人用运动方向而非朝向
+        use_path_orientations: False #omni机器人用运动方向而非朝向
 
 
 local_costmap:
@@ -540,7 +540,7 @@ local_costmap:
           min_obstacle_height: 0.0
           max_obstacle_height: 2.0
           obstacle_max_range: 5.0
-          obstacle_min_range: 0.25
+          obstacle_min_range: 0.35
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
@@ -588,7 +588,7 @@ global_costmap:
           min_obstacle_height: -0.01
           max_obstacle_height: 2.0
           obstacle_max_range: 10.0
-          obstacle_min_range: 0.25
+          obstacle_min_range: 0.35
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
@@ -740,12 +740,12 @@ velocity_smoother:
     smoothing_frequency: 30.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [10.0, 10.0, 2.5] #与 MPPI 限速一致，不再截断高速输出
-    min_velocity: [-10.0, -10.0, -2.5]
+    max_velocity: [1.0, 1.0, 0.0] #与 MPPI 限速一致，不再截断高速输出
+    min_velocity: [-1.0, -1.0, -0.0]
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
-    max_accel: [10.0, 10.0, 3.0] #与 MPPI 加速度一致
-    max_decel: [-10.0, -10.0, -3.0] #与 MPPI 制动一致
+    max_accel: [3.0, 3.0, 0.1] #与 MPPI 加速度一致
+    max_decel: [-3.0, -3.0, -0.1] #与 MPPI 制动一致
     odom_topic: "Odometry"
     odom_duration: 0.1
 
