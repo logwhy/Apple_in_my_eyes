@@ -24,6 +24,7 @@ smart_picking_manager:
   ros__parameters:
     use_sim_time: false
     goal_topic: "goal_pose"
+    nav_action_name: "/navigate_to_pose"
     robot_command_topic: "robot_command"
     robot_mode_topic: "robot_mode"
     nav_status_topic: "navigate_to_pose/_action/status"

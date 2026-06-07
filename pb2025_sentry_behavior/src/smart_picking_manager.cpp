@@ -1,20 +1,16 @@
-#include <algorithm>
-#include <array>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <functional>
 #include <optional>
 #include <sstream>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
-#include "action_msgs/msg/goal_status.hpp"
-#include "action_msgs/msg/goal_status_array.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "smarthome_vision/msg/detected_target.hpp"
 #include "std_msgs/msg/u_int8.hpp"
 #include "tf2/LinearMath/Quaternion.h"
@@ -39,15 +35,6 @@ constexpr uint8_t kModeScanDoneNoTarget = 4;
 constexpr uint8_t kModeDumping = 5;
 constexpr uint8_t kModeDumpDone = 6;
 constexpr uint8_t kModeError = 255;
-
-std::string uuidToString(const std::array<uint8_t, 16> & uuid)
-{
-  std::ostringstream oss;
-  for (const auto byte : uuid) {
-    oss << static_cast<int>(byte) << ".";
-  }
-  return oss.str();
-}
 
 std::optional<geometry_msgs::msg::PoseStamped> parseGoalString(
   const std::string & goal_str,
@@ -76,6 +63,7 @@ std::optional<geometry_msgs::msg::PoseStamped> parseGoalString(
   try {
     goal.pose.position.x = std::stod(parts[0]);
     goal.pose.position.y = std::stod(parts[1]);
+
     double yaw = 0.0;
     if (parts.size() == 3) {
       goal.pose.position.z = 0.0;
@@ -104,14 +92,22 @@ std::optional<geometry_msgs::msg::PoseStamped> parseGoalString(
 class SmartPickingManager : public rclcpp::Node
 {
 public:
+  using NavigateToPose = nav2_msgs::action::NavigateToPose;
+  using GoalHandleNavigateToPose = rclcpp_action::ClientGoalHandle<NavigateToPose>;
+
   SmartPickingManager()
   : Node("smart_picking_manager")
   {
+    // 旧参数保留，不再用于发布 /goal_pose，只是为了兼容原来的 yaml。
     goal_topic_ = declare_parameter<std::string>("goal_topic", "goal_pose");
-    robot_command_topic_ = declare_parameter<std::string>("robot_command_topic", "robot_command");
-    robot_mode_topic_ = declare_parameter<std::string>("robot_mode_topic", "robot_mode");
     nav_status_topic_ =
       declare_parameter<std::string>("nav_status_topic", "navigate_to_pose/_action/status");
+
+    // 新增：直接调用 Nav2 action。
+    nav_action_name_ = declare_parameter<std::string>("nav_action_name", "navigate_to_pose");
+
+    robot_command_topic_ = declare_parameter<std::string>("robot_command_topic", "robot_command");
+    robot_mode_topic_ = declare_parameter<std::string>("robot_mode_topic", "robot_mode");
     vision_topic_ = declare_parameter<std::string>("vision_topic", "detected_target");
     frame_id_ = declare_parameter<std::string>("frame_id", "map");
     settle_ms_ = declare_parameter<int>("settle_ms", 1000);
@@ -123,7 +119,8 @@ public:
     nav_goals_ = declare_parameter<std::vector<std::string>>(
       "nav_goals", std::vector<std::string>{"2.0;1.0;0.0"});
 
-    goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(goal_topic_, 10);
+    nav_client_ = rclcpp_action::create_client<NavigateToPose>(this, nav_action_name_);
+
     command_pub_ = create_publisher<std_msgs::msg::UInt8>(robot_command_topic_, 10);
 
     robot_mode_sub_ = create_subscription<std_msgs::msg::UInt8>(
@@ -131,13 +128,6 @@ public:
       [this](const std_msgs::msg::UInt8::SharedPtr msg) {
         previous_robot_mode_ = robot_mode_;
         robot_mode_ = msg->data;
-      });
-
-    nav_status_sub_ = create_subscription<action_msgs::msg::GoalStatusArray>(
-      nav_status_topic_, 10,
-      [this](const action_msgs::msg::GoalStatusArray::SharedPtr msg) {
-        latest_status_ = *msg;
-        have_status_ = true;
       });
 
     vision_sub_ = create_subscription<smarthome_vision::msg::DetectedTarget>(
@@ -151,9 +141,10 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "SmartPickingManager started. goals=%zu, status='%s', command='%s', mode='%s'",
-      nav_goals_.size(), nav_status_topic_.c_str(), robot_command_topic_.c_str(),
-      robot_mode_topic_.c_str());
+      "SmartPickingManager started. goals=%zu, action='%s', command='%s', mode='%s', "
+      "legacy_goal_topic='%s', legacy_status='%s'",
+      nav_goals_.size(), nav_action_name_.c_str(), robot_command_topic_.c_str(),
+      robot_mode_topic_.c_str(), goal_topic_.c_str(), nav_status_topic_.c_str());
   }
 
 private:
@@ -179,14 +170,17 @@ private:
       case State::SEND_NAV_GOAL:
         sendCurrentGoal();
         break;
+
       case State::WAIT_NAV_DONE:
-        if (hasNewSucceededGoal()) {
+        if (consumeNavigationSucceeded()) {
           settle_start_ = now();
           state_ = State::WAIT_SETTLE;
-          RCLCPP_INFO(get_logger(), "Waypoint %zu reached. Waiting %.3f s before scan.",
+          RCLCPP_INFO(
+            get_logger(), "Waypoint %zu reached. Waiting %.3f s before scan.",
             current_goal_index_, settle_ms_ / 1000.0);
         }
         break;
+
       case State::WAIT_SETTLE:
         if ((now() - settle_start_).seconds() >= settle_ms_ / 1000.0) {
           publishCommand(kCmdStartScan);
@@ -194,20 +188,25 @@ private:
           RCLCPP_INFO(get_logger(), "START_SCAN sent at waypoint %zu.", current_goal_index_);
         }
         break;
+
       case State::WAIT_SCAN_OR_PICK:
         handleLowerMode();
         break;
+
       case State::SEND_FINAL_GOAL:
         sendFinalGoal();
         break;
+
       case State::WAIT_FINAL_NAV_DONE:
-        if (hasNewSucceededGoal()) {
+        if (consumeNavigationSucceeded()) {
           settle_start_ = now();
           state_ = State::WAIT_DUMP_SETTLE;
-          RCLCPP_INFO(get_logger(), "Final dump point reached. Waiting %.3f s before dump.",
+          RCLCPP_INFO(
+            get_logger(), "Final dump point reached. Waiting %.3f s before dump.",
             dump_settle_ms_ / 1000.0);
         }
         break;
+
       case State::WAIT_DUMP_SETTLE:
         if ((now() - settle_start_).seconds() >= dump_settle_ms_ / 1000.0) {
           publishCommand(kCmdStartDump);
@@ -215,12 +214,15 @@ private:
           RCLCPP_INFO(get_logger(), "START_DUMP sent at final point.");
         }
         break;
+
       case State::WAIT_DUMP_DONE:
         handleDumpMode();
         break;
+
       case State::FINISHED:
         publishCommand(kCmdNone);
         break;
+
       case State::ERROR_STOP:
         publishCommand(kCmdHold);
         break;
@@ -246,8 +248,6 @@ private:
       return;
     }
 
-    snapshotSucceededGoalIds();
-
     const auto goal =
       parseGoalString(nav_goals_[current_goal_index_], frame_id_, now(), get_logger());
     if (!goal) {
@@ -255,60 +255,147 @@ private:
       return;
     }
 
-    goal_pub_->publish(goal.value());
+    if (!sendNavGoal(goal.value(), false)) {
+      return;
+    }
+
     state_ = State::WAIT_NAV_DONE;
     RCLCPP_INFO(
-      get_logger(), "Published waypoint %zu/%zu: %s", current_goal_index_ + 1,
-      nav_goals_.size(), nav_goals_[current_goal_index_].c_str());
+      get_logger(), "Sent waypoint %zu/%zu to Nav2 action '%s': %s",
+      current_goal_index_ + 1, nav_goals_.size(), nav_action_name_.c_str(),
+      nav_goals_[current_goal_index_].c_str());
   }
 
   void sendFinalGoal()
   {
-    snapshotSucceededGoalIds();
-
     const auto goal = parseGoalString(final_goal_, frame_id_, now(), get_logger());
     if (!goal) {
       state_ = State::ERROR_STOP;
       return;
     }
 
-    goal_pub_->publish(goal.value());
-    state_ = State::WAIT_FINAL_NAV_DONE;
-    RCLCPP_INFO(get_logger(), "Published final dump point: %s", final_goal_.c_str());
-  }
-
-  void snapshotSucceededGoalIds()
-  {
-    ignored_succeeded_goal_ids_.clear();
-    if (!have_status_) {
+    if (!sendNavGoal(goal.value(), true)) {
       return;
     }
 
-    for (const auto & status : latest_status_.status_list) {
-      if (status.status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED) {
-        ignored_succeeded_goal_ids_.insert(uuidToString(status.goal_info.goal_id.uuid));
-      }
-    }
+    state_ = State::WAIT_FINAL_NAV_DONE;
+    RCLCPP_INFO(
+      get_logger(), "Sent final dump point to Nav2 action '%s': %s",
+      nav_action_name_.c_str(), final_goal_.c_str());
   }
 
-  bool hasNewSucceededGoal() const
+  bool sendNavGoal(const geometry_msgs::msg::PoseStamped & pose, bool is_final_goal)
   {
-    if (!have_status_) {
+    if (!nav_client_->wait_for_action_server(std::chrono::milliseconds(100))) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Nav2 action server '%s' not available yet. Will retry.",
+        nav_action_name_.c_str());
       return false;
     }
 
-    for (const auto & status : latest_status_.status_list) {
-      if (status.status != action_msgs::msg::GoalStatus::STATUS_SUCCEEDED) {
-        continue;
-      }
+    nav_result_available_ = false;
+    nav_result_code_ = rclcpp_action::ResultCode::UNKNOWN;
 
-      const auto id = uuidToString(status.goal_info.goal_id.uuid);
-      if (ignored_succeeded_goal_ids_.find(id) == ignored_succeeded_goal_ids_.end()) {
-        return true;
-      }
+    NavigateToPose::Goal goal_msg;
+    goal_msg.pose = pose;
+
+    auto options = rclcpp_action::Client<NavigateToPose>::SendGoalOptions();
+
+    options.goal_response_callback =
+      [this, is_final_goal](const GoalHandleNavigateToPose::SharedPtr & goal_handle) {
+        if (!goal_handle) {
+          RCLCPP_ERROR(
+            get_logger(), "%s navigation goal was rejected by Nav2.",
+            is_final_goal ? "Final" : "Waypoint");
+          nav_result_code_ = rclcpp_action::ResultCode::ABORTED;
+          nav_result_available_ = true;
+          return;
+        }
+
+        RCLCPP_INFO(
+          get_logger(), "%s navigation goal accepted by Nav2.",
+          is_final_goal ? "Final" : "Waypoint");
+      };
+
+    options.feedback_callback =
+      [this](
+        GoalHandleNavigateToPose::SharedPtr,
+        const std::shared_ptr<const NavigateToPose::Feedback> feedback) {
+        if (!feedback) {
+          return;
+        }
+
+        RCLCPP_DEBUG_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "Nav2 feedback: distance_remaining=%.3f",
+          feedback->distance_remaining);
+      };
+
+    options.result_callback =
+      [this, is_final_goal](const GoalHandleNavigateToPose::WrappedResult & result) {
+        nav_result_code_ = result.code;
+        nav_result_available_ = true;
+
+        switch (result.code) {
+          case rclcpp_action::ResultCode::SUCCEEDED:
+            RCLCPP_INFO(
+              get_logger(), "%s navigation result: SUCCEEDED.",
+              is_final_goal ? "Final" : "Waypoint");
+            break;
+
+          case rclcpp_action::ResultCode::ABORTED:
+            RCLCPP_ERROR(
+              get_logger(), "%s navigation result: ABORTED.",
+              is_final_goal ? "Final" : "Waypoint");
+            break;
+
+          case rclcpp_action::ResultCode::CANCELED:
+            RCLCPP_WARN(
+              get_logger(), "%s navigation result: CANCELED.",
+              is_final_goal ? "Final" : "Waypoint");
+            break;
+
+          default:
+            RCLCPP_ERROR(
+              get_logger(), "%s navigation result: UNKNOWN.",
+              is_final_goal ? "Final" : "Waypoint");
+            break;
+        }
+      };
+
+    nav_client_->async_send_goal(goal_msg, options);
+    return true;
+  }
+
+  bool consumeNavigationSucceeded()
+  {
+    if (!nav_result_available_) {
+      return false;
     }
 
-    return false;
+    const auto code = nav_result_code_;
+    nav_result_available_ = false;
+
+    switch (code) {
+      case rclcpp_action::ResultCode::SUCCEEDED:
+        return true;
+
+      case rclcpp_action::ResultCode::ABORTED:
+        RCLCPP_ERROR(get_logger(), "Navigation aborted. Entering ERROR_STOP.");
+        state_ = State::ERROR_STOP;
+        return false;
+
+      case rclcpp_action::ResultCode::CANCELED:
+        RCLCPP_WARN(get_logger(), "Navigation canceled. Entering ERROR_STOP.");
+        state_ = State::ERROR_STOP;
+        return false;
+
+      default:
+        RCLCPP_ERROR(get_logger(), "Navigation failed with unknown result. Entering ERROR_STOP.");
+        state_ = State::ERROR_STOP;
+        return false;
+    }
   }
 
   void handleLowerMode()
@@ -403,10 +490,15 @@ private:
     command_clear_pending_ = false;
   }
 
+  // 兼容旧参数
   std::string goal_topic_;
+  std::string nav_status_topic_;
+
+  // 新的 Nav2 action 接口
+  std::string nav_action_name_;
+
   std::string robot_command_topic_;
   std::string robot_mode_topic_;
-  std::string nav_status_topic_;
   std::string vision_topic_;
   std::string frame_id_;
   int settle_ms_ = 1000;
@@ -417,10 +509,9 @@ private:
   std::string final_goal_;
   std::vector<std::string> nav_goals_;
 
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pub_;
+  rclcpp_action::Client<NavigateToPose>::SharedPtr nav_client_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr command_pub_;
   rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr robot_mode_sub_;
-  rclcpp::Subscription<action_msgs::msg::GoalStatusArray>::SharedPtr nav_status_sub_;
   rclcpp::Subscription<smarthome_vision::msg::DetectedTarget>::SharedPtr vision_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -429,9 +520,10 @@ private:
   uint8_t robot_mode_ = kModeIdle;
   uint8_t previous_robot_mode_ = kModeIdle;
   rclcpp::Time settle_start_;
-  bool have_status_ = false;
-  action_msgs::msg::GoalStatusArray latest_status_;
-  std::unordered_set<std::string> ignored_succeeded_goal_ids_;
+
+  bool nav_result_available_ = false;
+  rclcpp_action::ResultCode nav_result_code_ = rclcpp_action::ResultCode::UNKNOWN;
+
   smarthome_vision::msg::DetectedTarget latest_target_;
   bool command_clear_pending_ = false;
   rclcpp::Time command_clear_time_;
