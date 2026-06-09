@@ -19,6 +19,7 @@
 #include <string>
 
 #include "nav_msgs/msg/odometry.hpp"
+#include "pb_cuda_pointcloud/pointcloud_accel.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -53,6 +54,7 @@ private:
 
   bool base_frame_to_lidar_initialized_;
   tf2::Transform tf_odom_to_lidar_odom_;
+  pb_cuda_pointcloud::BackendOptions cuda_options_;
 };
 
 }  // namespace loam_interface

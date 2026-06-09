@@ -5,6 +5,10 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 
+#if PB_POINT_LIO_HAS_CUDA_ACCEL
+#include "pb_cuda_pointcloud/pointcloud_accel.hpp"
+#endif
+
 using namespace std;
 
 #define IS_VALID(a) ((abs(a) > 1e8) ? true : false)
@@ -112,6 +116,9 @@ class Preprocess
   void process(const livox_ros_driver2::msg::CustomMsg::SharedPtr &msg, PointCloudXYZI::Ptr &pcl_out);
   void process(const sensor_msgs::msg::PointCloud2::SharedPtr &msg, PointCloudXYZI::Ptr &pcl_out);
   void set(bool feat_en, int lid_type, double bld, int pfilt_num);
+#if PB_POINT_LIO_HAS_CUDA_ACCEL
+  void setCudaOptions(const pb_cuda_pointcloud::BackendOptions & options);
+#endif
 
   // sensor_msgs::msg::PointCloud2::SharedPtr pointcloud;
   PointCloudXYZI pl_full, pl_corn, pl_surf;
@@ -121,6 +128,9 @@ class Preprocess
   int lidar_type, point_filter_num, N_SCANS, SCAN_RATE, time_unit;
   double blind, det_range;
   bool given_offset_time;
+#if PB_POINT_LIO_HAS_CUDA_ACCEL
+  pb_cuda_pointcloud::BackendOptions cuda_options_;
+#endif
 
   private:
   void avia_handler(const livox_ros_driver2::msg::CustomMsg::SharedPtr &msg);

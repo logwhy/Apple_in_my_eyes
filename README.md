@@ -529,3 +529,13 @@ ros2 topic echo /serial_tx_hex
 - 下位机负责扫描、采摘、倾倒的具体动作。
 - 上位机在扫描、采摘、倾倒时会尽量保证底盘速度为 0。
 - 所有采摘点完成后，必须去最终点执行倾倒，除非 `use_final_goal=false`。
+
+## Jetson Orin NX CUDA 导航加速入口
+
+`cuda` 分支在 `pb2025_sentry_nav` 中新增了 `pb_cuda_pointcloud` 公共点云加速包，面向 Jetson Orin NX / CUDA 12.6 / `sm_87`。本次只加速点云预处理、点云变换、地形体素下采样和 SLAM 点云转 LaserScan 等 CPU 热点，不修改导航速度、RViz 显示、地图计算频率、Nav2 controller 或 costmap 参数。
+
+详细构建、开关和真机检查方式见：
+
+```text
+pb2025_sentry_nav/README.md
+```

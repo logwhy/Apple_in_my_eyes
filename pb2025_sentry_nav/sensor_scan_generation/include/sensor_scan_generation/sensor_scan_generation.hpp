@@ -22,6 +22,7 @@
 #include "message_filters/sync_policies/approximate_time.h"
 #include "message_filters/synchronizer.h"
 #include "nav_msgs/msg/odometry.hpp"
+#include "pb_cuda_pointcloud/pointcloud_accel.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "tf2_ros/buffer.h"
@@ -71,6 +72,7 @@ private:
   std::unique_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
 
   tf2::Transform tf_lidar_to_robot_base_;
+  pb_cuda_pointcloud::BackendOptions cuda_options_;
 };
 
 }  // namespace sensor_scan_generation

@@ -17,6 +17,7 @@
 #include <math.h>
 
 #include "nav_msgs/msg/odometry.hpp"
+#include "pb_cuda_pointcloud/pointcloud_accel.hpp"
 #include "pcl/filters/voxel_grid.h"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
@@ -55,6 +56,7 @@ double voxelTimeUpdateThre = 2.0;
 double minRelZ = -1.5;
 double maxRelZ = 0.2;
 double disRatioZ = 0.2;
+pb_cuda_pointcloud::BackendOptions cudaOptions;
 
 // terrain voxel parameters
 float terrainVoxelSize = 1.0;
@@ -223,6 +225,9 @@ int main(int argc, char **argv) {
   nh->declare_parameter<double>("minRelZ", minRelZ);
   nh->declare_parameter<double>("maxRelZ", maxRelZ);
   nh->declare_parameter<double>("disRatioZ", disRatioZ);
+  nh->declare_parameter<bool>("cuda.enable", true);
+  nh->declare_parameter<int>("cuda.device_id", 0);
+  nh->declare_parameter<bool>("cuda.profile", false);
 
   nh->get_parameter("scanVoxelSize", scanVoxelSize);
   nh->get_parameter("decayTime", decayTime);
@@ -250,6 +255,9 @@ int main(int argc, char **argv) {
   nh->get_parameter("minRelZ", minRelZ);
   nh->get_parameter("maxRelZ", maxRelZ);
   nh->get_parameter("disRatioZ", disRatioZ);
+  nh->get_parameter("cuda.enable", cudaOptions.enable);
+  nh->get_parameter("cuda.device_id", cudaOptions.device_id);
+  nh->get_parameter("cuda.profile", cudaOptions.profile);
 
   auto subOdometry = nh->create_subscription<nav_msgs::msg::Odometry>(
       "lidar_odometry", 5, odometryHandler);
@@ -385,8 +393,12 @@ int main(int argc, char **argv) {
               terrainVoxelCloud[ind];
 
           laserCloudDwz->clear();
-          downSizeFilter.setInputCloud(terrainVoxelCloudPtr);
-          downSizeFilter.filter(*laserCloudDwz);
+          if (!pb_cuda_pointcloud::voxelDownsampleXYZI(
+                *terrainVoxelCloudPtr, *laserCloudDwz, static_cast<float>(scanVoxelSize),
+                cudaOptions)) {
+            downSizeFilter.setInputCloud(terrainVoxelCloudPtr);
+            downSizeFilter.filter(*laserCloudDwz);
+          }
 
           terrainVoxelCloudPtr->clear();
           int laserCloudDwzSize = laserCloudDwz->points.size();

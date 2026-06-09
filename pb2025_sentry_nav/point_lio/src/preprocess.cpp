@@ -41,6 +41,13 @@ void Preprocess::set(bool feat_en, int lid_type, double bld, int pfilt_num)
   point_filter_num = pfilt_num;
 }
 
+#if PB_POINT_LIO_HAS_CUDA_ACCEL
+void Preprocess::setCudaOptions(const pb_cuda_pointcloud::BackendOptions & options)
+{
+  cuda_options_ = options;
+}
+#endif
+
 void Preprocess::process(
   const livox_ros_driver2::msg::CustomMsg::SharedPtr & msg, PointCloudXYZI::Ptr & pcl_out)
 {
@@ -319,6 +326,15 @@ void Preprocess::process_cut_frame_pcl2(
 
 void Preprocess::avia_handler(const livox_ros_driver2::msg::CustomMsg::SharedPtr & msg)
 {
+#if PB_POINT_LIO_HAS_CUDA_ACCEL
+  if (pb_cuda_pointcloud::filterLivox(
+        *msg, pl_surf, N_SCANS, point_filter_num, blind, det_range, cuda_options_)) {
+    pl_corn.clear();
+    pl_full.clear();
+    return;
+  }
+#endif
+
   pl_surf.clear();
   pl_corn.clear();
   pl_full.clear();

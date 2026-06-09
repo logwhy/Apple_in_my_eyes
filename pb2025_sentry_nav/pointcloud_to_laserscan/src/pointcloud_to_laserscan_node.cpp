@@ -76,6 +76,9 @@ PointCloudToLaserScanNode::PointCloudToLaserScanNode(const rclcpp::NodeOptions &
   range_max_ = this->declare_parameter("range_max", std::numeric_limits<double>::max());
   inf_epsilon_ = this->declare_parameter("inf_epsilon", 1.0);
   use_inf_ = this->declare_parameter("use_inf", true);
+  cuda_options_.enable = this->declare_parameter("cuda.enable", true);
+  cuda_options_.device_id = this->declare_parameter("cuda.device_id", 0);
+  cuda_options_.profile = this->declare_parameter("cuda.profile", false);
 
   pub_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", rclcpp::SensorDataQoS());
 
@@ -175,6 +178,13 @@ void PointCloudToLaserScanNode::cloudCallback(
       RCLCPP_ERROR_STREAM(this->get_logger(), "Transform failure: " << ex.what());
       return;
     }
+  }
+
+  if (pb_cuda_pointcloud::pointCloudToLaserScan(
+        *cloud_msg, *scan_msg, min_height_, max_height_, min_intensity_, max_intensity_,
+        range_min_, range_max_, cuda_options_)) {
+    pub_->publish(std::move(scan_msg));
+    return;
   }
 
   // Iterate through pointcloud

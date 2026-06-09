@@ -39,6 +39,8 @@ double time_diff_lidar_to_imu = 0.0;
 bool enable_prior_pcd;
 string prior_pcd_map_path;
 std::vector<double> init_pose;
+bool cuda_enable = true, cuda_preprocess = true, cuda_downsample = true, cuda_profile = false;
+int cuda_device_id = 0;
 
 double lidar_time_inte = 0.1, first_imu_time = 0.0;
 int cut_frame_num = 1, orig_odom_freq = 10;
@@ -68,6 +70,21 @@ void readParameters(std::shared_ptr<rclcpp::Node> & nh)
 
     nh->declare_parameter<bool>("space_down_sample", true);
     nh->get_parameter("space_down_sample", space_down_sample);
+
+    nh->declare_parameter<bool>("cuda.enable", true);
+    nh->get_parameter("cuda.enable", cuda_enable);
+
+    nh->declare_parameter<int>("cuda.device_id", 0);
+    nh->get_parameter("cuda.device_id", cuda_device_id);
+
+    nh->declare_parameter<bool>("cuda.profile", false);
+    nh->get_parameter("cuda.profile", cuda_profile);
+
+    nh->declare_parameter<bool>("cuda.preprocess", true);
+    nh->get_parameter("cuda.preprocess", cuda_preprocess);
+
+    nh->declare_parameter<bool>("cuda.downsample", true);
+    nh->get_parameter("cuda.downsample", cuda_downsample);
 
     nh->declare_parameter<double>("mapping.satu_acc", 3.0);
     nh->get_parameter("mapping.satu_acc", satu_acc);
@@ -247,6 +264,13 @@ void readParameters(std::shared_ptr<rclcpp::Node> & nh)
     ivox_options_.nearby_type_ = IVoxType::NearbyType::NEARBY18;
   }
   p_imu->gravity_ << VEC_FROM_ARRAY(gravity);
+#if PB_POINT_LIO_HAS_CUDA_ACCEL
+  pb_cuda_pointcloud::BackendOptions options;
+  options.enable = cuda_enable && cuda_preprocess;
+  options.device_id = cuda_device_id;
+  options.profile = cuda_profile;
+  p_pre->setCudaOptions(options);
+#endif
 }
 
 Eigen::Matrix<double, 3, 1> SO3ToEuler(const SO3 & rot)

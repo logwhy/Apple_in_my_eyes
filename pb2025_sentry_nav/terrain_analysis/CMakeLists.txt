@@ -30,6 +30,7 @@ find_package(tf2 REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
+find_package(pb_cuda_pointcloud REQUIRED)
 
 add_executable(terrainAnalysis src/terrainAnalysis.cpp)
 ament_target_dependencies(
@@ -44,7 +45,8 @@ ament_target_dependencies(
   tf2_geometry_msgs
   message_filters
   pcl_ros
-  pcl_conversions)
+  pcl_conversions
+  pb_cuda_pointcloud)
 
 install(TARGETS terrainAnalysis DESTINATION lib/${PROJECT_NAME})
 

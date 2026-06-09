@@ -13,6 +13,10 @@
 
 #include "li_initialization.h"
 
+#if PB_POINT_LIO_HAS_CUDA_ACCEL
+#include "pb_cuda_pointcloud/pointcloud_accel.hpp"
+#endif
+
 using namespace std;
 
 #define PUBFRAME_PERIOD (20)
@@ -472,8 +476,21 @@ int main(int argc, char ** argv)
       t1 = omp_get_wtime();
       p_imu->Process(Measures, feats_undistort);
       if (space_down_sample) {
+#if PB_POINT_LIO_HAS_CUDA_ACCEL
+        pb_cuda_pointcloud::BackendOptions downsample_options;
+        downsample_options.enable = cuda_enable && cuda_downsample;
+        downsample_options.device_id = cuda_device_id;
+        downsample_options.profile = cuda_profile;
+        if (!pb_cuda_pointcloud::voxelDownsample(
+              *feats_undistort, *feats_down_body, static_cast<float>(filter_size_surf_min),
+              downsample_options)) {
+          downSizeFilterSurf.setInputCloud(feats_undistort);
+          downSizeFilterSurf.filter(*feats_down_body);
+        }
+#else
         downSizeFilterSurf.setInputCloud(feats_undistort);
         downSizeFilterSurf.filter(*feats_down_body);
+#endif
         sort(feats_down_body->points.begin(), feats_down_body->points.end(), time_list);
       } else {
         feats_down_body = Measures.lidar;
@@ -543,8 +560,8 @@ int main(int argc, char ** argv)
       t2 = omp_get_wtime();
 
       /*** iterated state estimation ***/
-      crossmat_list.reserve(feats_down_size);
-      pbody_list.reserve(feats_down_size);
+      crossmat_list.resize(feats_down_size);
+      pbody_list.resize(feats_down_size);
       // pbody_ext_list.reserve(feats_down_size);
 
       for (size_t i = 0; i < feats_down_body->size(); i++) {

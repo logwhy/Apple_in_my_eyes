@@ -14,6 +14,8 @@
 
 #include "loam_interface/loam_interface.hpp"
 
+#include <Eigen/Core>
+
 #include "pcl_ros/transforms.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
@@ -28,12 +30,18 @@ LoamInterfaceNode::LoamInterfaceNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("odom_frame", "odom");
   this->declare_parameter<std::string>("base_frame", "");
   this->declare_parameter<std::string>("lidar_frame", "");
+  this->declare_parameter<bool>("cuda.enable", true);
+  this->declare_parameter<int>("cuda.device_id", 0);
+  this->declare_parameter<bool>("cuda.profile", false);
 
   this->get_parameter("state_estimation_topic", state_estimation_topic_);
   this->get_parameter("registered_scan_topic", registered_scan_topic_);
   this->get_parameter("odom_frame", odom_frame_);
   this->get_parameter("base_frame", base_frame_);
   this->get_parameter("lidar_frame", lidar_frame_);
+  this->get_parameter("cuda.enable", cuda_options_.enable);
+  this->get_parameter("cuda.device_id", cuda_options_.device_id);
+  this->get_parameter("cuda.profile", cuda_options_.profile);
 
   base_frame_to_lidar_initialized_ = false;
 
@@ -56,7 +64,21 @@ void LoamInterfaceNode::pointCloudCallback(const sensor_msgs::msg::PointCloud2::
   // NOTE: Input point cloud message is based on the `lidar_odom`
   // Here we transform it to the REAL `odom` frame
   auto out = std::make_shared<sensor_msgs::msg::PointCloud2>();
-  pcl_ros::transformPointCloud(odom_frame_, tf_odom_to_lidar_odom_, *msg, *out);
+  Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
+  const auto & basis = tf_odom_to_lidar_odom_.getBasis();
+  const auto & origin = tf_odom_to_lidar_odom_.getOrigin();
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      transform(row, col) = static_cast<float>(basis[row][col]);
+    }
+  }
+  transform(0, 3) = static_cast<float>(origin.x());
+  transform(1, 3) = static_cast<float>(origin.y());
+  transform(2, 3) = static_cast<float>(origin.z());
+  if (!pb_cuda_pointcloud::transformPointCloudInPlace(
+        *msg, *out, transform, odom_frame_, cuda_options_)) {
+    pcl_ros::transformPointCloud(odom_frame_, tf_odom_to_lidar_odom_, *msg, *out);
+  }
   pcd_pub_->publish(*out);
 }
 

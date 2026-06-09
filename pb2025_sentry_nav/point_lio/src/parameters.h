@@ -78,6 +78,8 @@ extern double time_update_last, time_current, time_predict_last_const, t_last;
 extern bool enable_prior_pcd;
 extern string prior_pcd_map_path;
 extern std::vector<double> init_pose;
+extern bool cuda_enable, cuda_preprocess, cuda_downsample, cuda_profile;
+extern int cuda_device_id;
 
 extern MeasureGroup Measures;
 

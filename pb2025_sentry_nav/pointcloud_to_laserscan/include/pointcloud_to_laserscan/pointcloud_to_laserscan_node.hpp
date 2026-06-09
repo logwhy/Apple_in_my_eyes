@@ -55,6 +55,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 
+#include "pb_cuda_pointcloud/pointcloud_accel.hpp"
 #include "pointcloud_to_laserscan/visibility_control.h"
 
 namespace pointcloud_to_laserscan
@@ -95,6 +96,7 @@ private:
     range_max_;
   bool use_inf_;
   double inf_epsilon_;
+  pb_cuda_pointcloud::BackendOptions cuda_options_;
 };
 
 }  // namespace pointcloud_to_laserscan

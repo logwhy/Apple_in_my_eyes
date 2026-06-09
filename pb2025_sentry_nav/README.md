@@ -229,3 +229,74 @@ use_robot_state_pub:=True
 默认情况下，PS4 手柄控制已开启。键位映射关系详见 [nav2_params.yaml](./pb2025_nav_bringup/config/simulation/nav2_params.yaml) 中的 `teleop_twist_joy_node` 部分。
 
 ![teleop_twist_joy.gif](https://raw.githubusercontent.com/LihanChen2004/picx-images-hosting/master/teleop_twist_joy.5j4aav3v3p.gif)
+
+## Jetson Orin NX CUDA 加速增量
+
+本分支面向 Jetson Orin NX，目标环境为 CUDA 12.6、GPU 架构 `sm_87`。TensorRT 10 不参与导航点云链路，本次没有引入 TensorRT。
+
+### 改动范围
+
+- 新增 `pb_cuda_pointcloud` 公共包，提供可选 CUDA 点云加速接口，并保留 CPU 回退路径。
+- `point_lio`：ARM64/NX 不再强制 `MP_PROC_NUM=1`；修复 `pbody_list`、`crossmat_list` 只 `reserve` 后按下标写入的越界风险；Livox 点云预处理和 scan 下采样会优先尝试加速接口，失败后自动回到原 CPU/PCL 逻辑。
+- `loam_interface`、`sensor_scan_generation`：整帧 PointCloud2 坐标变换优先尝试加速接口，失败后回到 `pcl_ros::transformPointCloud`。
+- `terrain_analysis`、`terrain_analysis_ext`：地形体素更新中的下采样优先尝试加速接口，失败后回到原 PCL VoxelGrid。
+- `pointcloud_to_laserscan`：SLAM 模式下 PointCloud2 到 LaserScan 的逐点 binning 优先使用公共接口。
+
+没有修改导航速度、RViz 显示、Livox 发布频率、SLAM 地图更新周期、Nav2 controller 频率、local/global costmap 更新频率等参数。
+
+### 构建方式
+
+无 CUDA 或本机代码检查：
+
+```bash
+colcon build --packages-select \
+  pb_cuda_pointcloud point_lio loam_interface sensor_scan_generation \
+  terrain_analysis terrain_analysis_ext pointcloud_to_laserscan \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DPB_NAV_USE_CUDA=OFF
+```
+
+Jetson Orin NX / CUDA 12.6：
+
+```bash
+colcon build --packages-select \
+  pb_cuda_pointcloud point_lio loam_interface sensor_scan_generation \
+  terrain_analysis terrain_analysis_ext pointcloud_to_laserscan \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DPB_NAV_USE_CUDA=ON -DPB_CUDA_ARCHITECTURES=87
+```
+
+`PB_NAV_USE_CUDA=AUTO` 会在发现 CUDA 编译器和 CUDAToolkit 时自动启用，否则走 CPU。
+
+### 运行开关
+
+新增参数不要求写入现有 YAML。默认会尝试启用 CUDA，若设备不可用则自动回退。
+
+```yaml
+cuda:
+  enable: true
+  device_id: 0
+  profile: false
+```
+
+`point_lio` 额外支持：
+
+```yaml
+cuda:
+  preprocess: true
+  downsample: true
+```
+
+如需临时排查，可在 launch 时覆盖：
+
+```bash
+ros2 launch pb2025_nav_bringup rm_navigation_reality_launch.py \
+  use_robot_state_pub:=True \
+  use_rviz:=True \
+  --ros-args -p cuda.enable:=false
+```
+
+### 真机检查
+
+- `tegrastats` 查看 CPU 是否下降、GPU 是否有负载。
+- `ros2 topic hz /cloud_registered`、`ros2 topic hz /terrain_map` 查看是否稳定。
+- RViz 观察机器人运动时点云是否不再明显拖漂。
+- 若 CUDA 路径异常，关闭 `cuda.enable` 后应能回到原 CPU 逻辑继续运行。
