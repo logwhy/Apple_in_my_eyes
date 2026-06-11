@@ -48,7 +48,7 @@ find_package(tf2_ros REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(glog REQUIRED)
-find_package(OpenMP QUIET)
+find_package(OpenMP REQUIRED)
 find_package(PythonLibs REQUIRED) # Consider using Pybind11 for ROS2
 find_path(MATPLOTLIB_CPP_INCLUDE_DIRS "matplotlibcpp.h")
 find_package(pb_cuda_pointcloud QUIET)
@@ -94,6 +94,9 @@ ament_target_dependencies(pointlio_mapping
 )
 
 target_link_libraries(pointlio_mapping ${PCL_LIBRARIES} ${PYTHON_LIBRARIES})
+if(TARGET OpenMP::OpenMP_CXX)
+  target_link_libraries(pointlio_mapping OpenMP::OpenMP_CXX)
+endif()
 if(pb_cuda_pointcloud_FOUND)
   target_compile_definitions(pointlio_mapping PRIVATE PB_POINT_LIO_HAS_CUDA_ACCEL=1)
   ament_target_dependencies(pointlio_mapping pb_cuda_pointcloud)

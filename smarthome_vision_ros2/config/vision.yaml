@@ -3,7 +3,9 @@ smarthome_vision_node:
     image_topic: "/image_raw"
     gimbal_mode_topic: "gimbal_mode"
 
-    show_debug: true
+    show_debug: false
+    log_debug_result: true
+    debug_view_scale: 1
     inference_backend: "openvino"
     openvino_device: "CPU"
     use_cuda_preprocess: false
@@ -20,11 +22,11 @@ smarthome_vision_node:
     camera_fps: 30
 
     camera_matrix: [
-      816.011939, 0.000000, 305.516996,
-      0.000000, 812.516912, 226.442214,
+      480.076424, 0.000000, 324.641891,
+      0.000000, 481.012310, 242.491443,
       0.000000, 0.000000, 1.000000
     ]
-    dist_coeffs: [-0.399955, 0.075996, 0.005002, 0.002332, 0.000000]
+    dist_coeffs: [-0.046451, 0.085529, 0.001981, 0.006941, 0.000000]
 
     # Object class ids: red=0, yellow=1, green=2.
     # class_sizes are width/height pairs in meters, in the same order.

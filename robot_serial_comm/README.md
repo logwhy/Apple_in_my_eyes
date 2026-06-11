@@ -78,4 +78,4 @@ struct GimbalToVision
 ros2 launch robot_serial_comm robot_serial_comm.launch.py
 ```
 
-See `config/robot_serial_comm.yaml` for serial device, baudrate, and topic names.
+See `config/robot_serial_comm.yaml` for serial device, baudrate, reconnect interval, and topic names.

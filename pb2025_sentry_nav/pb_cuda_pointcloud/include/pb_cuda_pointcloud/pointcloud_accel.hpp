@@ -1,9 +1,7 @@
 #ifndef PB_CUDA_POINTCLOUD__POINTCLOUD_ACCEL_HPP_
 #define PB_CUDA_POINTCLOUD__POINTCLOUD_ACCEL_HPP_
 
-#include <array>
 #include <string>
-#include <vector>
 
 #include <Eigen/Core>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
@@ -49,16 +47,6 @@ bool pointCloudToLaserScan(
   const sensor_msgs::msg::PointCloud2 & cloud_msg, sensor_msgs::msg::LaserScan & scan_msg,
   double min_height, double max_height, double min_intensity, double max_intensity,
   double range_min, double range_max, const BackendOptions & options);
-
-struct KnnResult
-{
-  std::vector<std::array<int, 5>> indices;
-  std::vector<std::array<float, 5>> squared_distances;
-};
-
-bool knn5(
-  const PointCloudXYZI & query, const PointCloudXYZI & target, float max_range,
-  KnnResult & result, const BackendOptions & options);
 
 }  // namespace pb_cuda_pointcloud
 

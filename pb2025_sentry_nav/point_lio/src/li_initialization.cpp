@@ -1,4 +1,7 @@
 #include "li_initialization.h"
+
+#include <algorithm>
+
 bool data_accum_finished = false, data_accum_start = false, online_calib_finish = false,
      refine_print = false;
 int frame_num_init = 0;
@@ -23,6 +26,68 @@ bool lidar_pushed = false, imu_pushed = false;
 std::deque<PointCloudXYZI::Ptr> lidar_buffer;
 std::deque<double> time_buffer;
 std::deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu_deque;
+
+namespace
+{
+void warnDropped(const char * name, int dropped, int & total_dropped)
+{
+  if (dropped <= 0) {
+    return;
+  }
+  total_dropped += dropped;
+  if (total_dropped > 3 && total_dropped % 30 >= dropped) {
+    return;
+  }
+  RCLCPP_WARN(
+    rclcpp::get_logger("li_initialization"),
+    "Dropped %d stale %s messages because point_lio input buffer is overloaded; total dropped: %d",
+    dropped, name, total_dropped);
+}
+
+void trimLidarBuffer()
+{
+  const int max_buffer_size = std::max(runtime_max_lidar_buffer_size, 0);
+  if (max_buffer_size == 0 || lidar_pushed) {
+    return;
+  }
+
+  int dropped = 0;
+  static int total_dropped = 0;
+  while (lidar_buffer.size() > time_buffer.size()) {
+    lidar_buffer.pop_front();
+    ++dropped;
+  }
+  while (time_buffer.size() > lidar_buffer.size()) {
+    time_buffer.pop_front();
+    ++dropped;
+  }
+  while (
+    !lidar_buffer.empty() && !time_buffer.empty() &&
+    (static_cast<int>(lidar_buffer.size()) > max_buffer_size ||
+     static_cast<int>(time_buffer.size()) > max_buffer_size)) {
+    lidar_buffer.pop_front();
+    time_buffer.pop_front();
+    ++dropped;
+  }
+  warnDropped("lidar", dropped, total_dropped);
+}
+
+void trimImuBuffer()
+{
+  const int max_buffer_size = std::max(runtime_max_imu_buffer_size, 0);
+  if (max_buffer_size == 0) {
+    return;
+  }
+
+  int dropped = 0;
+  static int total_dropped = 0;
+  while (static_cast<int>(imu_deque.size()) > max_buffer_size) {
+    imu_deque.pop_front();
+    ++dropped;
+  }
+  warnDropped("imu", dropped, total_dropped);
+}
+}  // namespace
 
 void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr & msg)
 {
@@ -82,6 +147,7 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr & msg)
       }
     }
   }
+  trimLidarBuffer();
   s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
   // mtx_buffer.unlock();
   // sig_buffer.notify_all();
@@ -145,6 +211,7 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr & msg)
       }
     }
   }
+  trimLidarBuffer();
   s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
   // mtx_buffer.unlock();
   // sig_buffer.notify_all();
@@ -174,6 +241,7 @@ void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr & msg_in)
     return;
   }
   imu_deque.emplace_back(msg);
+  trimImuBuffer();
   last_timestamp_imu = timestamp;
   // mtx_buffer.unlock();
   // sig_buffer.notify_all();

@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Run last.onnx on images for quick Windows-side validation.
+"""Detect objects in images using ONNX or OpenVINO.
 
 Dependencies:
-  pip install onnxruntime opencv-python numpy
+  conda activate rs
+  pip install onnxruntime openvino opencv-python numpy
 
 Examples:
-  1. Edit SOURCE_PATH below, then run:
-     python smarthome_vision_ros2/test_last_onnx.py
-
-  2. Or pass a path from terminal:
-  python smarthome_vision_ros2/test_last_onnx.py path\\to\\image.jpg
-  python smarthome_vision_ros2/test_last_onnx.py path\\to\\images --show
-  python smarthome_vision_ros2/test_last_onnx.py img.jpg --conf 0.35 --decode yolov8
+  python test_last_onnx.py path/to/images --show
+  python test_last_onnx.py image.jpg --conf 0.35
 """
 
 from __future__ import annotations
@@ -21,16 +17,15 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Callable, Sequence
 
 try:
     import cv2
     import numpy as np
-    import onnxruntime as ort
 except ImportError as exc:
     raise SystemExit(
         f"Missing dependency: {exc.name}\n"
-        "Install it with: pip install onnxruntime opencv-python numpy"
+        "Install it with: pip install opencv-python numpy"
     ) from exc
 
 
@@ -38,20 +33,20 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
-# Change this path when testing on Windows. It can be one image or a directory.
-SOURCE_PATH = r"C:\Users\38480\Desktop\lf_sentry-main\smarthome_vision_ros2\assets\2.png"
-
-MODEL_PATH = SCRIPT_DIR / "assets" / "last.onnx"
-OUTPUT_DIR = SCRIPT_DIR / "result" / "last_onnx_test"
+MODEL_PATH = r"C:\Users\38480\Desktop\database\apple_detection\weights\last.onnx"
+OPENVINO_MODEL_PATH = SCRIPT_DIR / "assets" / "last_openvino_model" / "last.xml"
 
 IMG_SIZE = 640
 CONF_THRESHOLD = 0.75
 IOU_THRESHOLD = 0.45
-DECODE_MODE = "auto"  # auto, cpp, yolov8, yolov5, xyxy
-PREPROCESS_MODE = "resize"  # resize matches the current C++ detector; letterbox often matches YOLO.
+DECODE_MODE = "auto"
+PREPROCESS_MODE = "resize"
 CLASS_NAMES = ["0", "1", "2"]
-SHOW_RESULT = False
-SAVE_TXT = False
+SHOW_RESULT = True
+BACKEND = "both"
+OPENVINO_DEVICE = "CPU"
+WARMUP_RUNS = 1
+REPEAT_RUNS = 1
 
 # Copied from config/vision.yaml.
 CAMERA_MATRIX = np.array(
@@ -64,7 +59,6 @@ CAMERA_MATRIX = np.array(
 )
 DIST_COEFFS = np.array([-0.399955, 0.075996, 0.005002, 0.002332, 0.000000], dtype=np.float64)
 
-# Width/height in meters, copied from config/vision.yaml.
 CLASS_SIZES = {
     0: (0.083, 0.073),
     1: (0.060, 0.050),
@@ -95,48 +89,134 @@ class Detection:
     reproj_error: float | None = None
 
 
+class Runner:
+    """Base class for inference runners."""
+    def __init__(self, name: str, input_w: int, input_h: int):
+        self.name = name
+        self.input_w = input_w
+        self.input_h = input_h
+    
+    def infer(self, tensor: np.ndarray) -> np.ndarray:
+        raise NotImplementedError
+
+
+class ONNXRunner(Runner):
+    def __init__(self, model_path: Path, fallback_size: int):
+        super().__init__("ONNXRuntime CPU", 0, 0)
+        if not model_path.is_file():
+            raise FileNotFoundError(f"ONNX model does not exist: {model_path}")
+        
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise SystemExit(
+                "onnxruntime is required for --backend onnx/both.\n"
+                "Install it with: pip install onnxruntime"
+            ) from exc
+        
+        providers = ["CPUExecutionProvider"]
+        self.session = ort.InferenceSession(str(model_path), providers=providers)
+        self.input_meta = self.session.get_inputs()[0]
+        shape = self.input_meta.shape
+        if len(shape) != 4:
+            raise ValueError(f"Expected NCHW 4D input, got shape: {shape}")
+        
+        self.input_h = static_dim(shape[2], fallback_size)
+        self.input_w = static_dim(shape[3], fallback_size)
+        self.input_name = self.input_meta.name
+    
+    def infer(self, tensor: np.ndarray) -> np.ndarray:
+        return self.session.run(None, {self.input_name: tensor})[0]
+
+
+class OpenVINORunner(Runner):
+    def __init__(self, model_path: Path, device: str, fallback_size: int):
+        super().__init__(f"OpenVINO {device}", 0, 0)
+        if not model_path.is_file():
+            raise FileNotFoundError(f"OpenVINO model does not exist: {model_path}")
+        
+        try:
+            import openvino as ov
+        except ImportError as exc:
+            raise SystemExit(
+                "openvino is required for --backend openvino/both.\n"
+                "Install it with: pip install openvino"
+            ) from exc
+        
+        core = ov.Core()
+        model = core.read_model(str(model_path))
+        input_port = model.input(0)
+        if input_port.partial_shape.is_dynamic:
+            model.reshape({input_port.get_any_name(): [1, 3, fallback_size, fallback_size]})
+            input_port = model.input(0)
+        
+        shape = list(input_port.shape)
+        if len(shape) != 4:
+            raise ValueError(f"Expected OpenVINO NCHW 4D input, got shape: {shape}")
+        
+        self.input_h = int(shape[2])
+        self.input_w = int(shape[3])
+        
+        compiled = core.compile_model(
+            model,
+            device,
+            {"PERFORMANCE_HINT": "LATENCY"},
+        )
+        self.compiled = compiled
+        self.input_name = compiled.input(0).get_any_name()
+        self.output_port = compiled.output(0)
+    
+    def infer(self, tensor: np.ndarray) -> np.ndarray:
+        outputs = self.compiled({self.input_name: tensor})
+        return np.asarray(outputs[self.output_port])
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Test smarthome_vision_ros2/assets/last.onnx on images."
+        description="Detect objects in images using ONNX or OpenVINO."
     )
     parser.add_argument(
         "source",
         type=Path,
-        nargs="?",
-        default=None,
-        help="Image file or image directory. If omitted, SOURCE_PATH at the top of this file is used.",
+        help="Image file or image directory to process.",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=("onnx", "openvino", "both"),
+        default=BACKEND,
+        help="Inference backend to use.",
     )
     parser.add_argument("--model", type=Path, default=MODEL_PATH, help="Path to ONNX model.")
-    parser.add_argument("--output", type=Path, default=OUTPUT_DIR, help="Output directory.")
-    parser.add_argument("--imgsz", type=int, default=IMG_SIZE, help="Fallback input size for dynamic ONNX.")
+    parser.add_argument(
+        "--openvino-model",
+        type=Path,
+        default=OPENVINO_MODEL_PATH,
+        help="Path to OpenVINO .xml IR model.",
+    )
+    parser.add_argument(
+        "--openvino-device",
+        default=OPENVINO_DEVICE,
+        help="OpenVINO device, such as CPU, GPU, AUTO, or NPU.",
+    )
+    parser.add_argument("--imgsz", type=int, default=IMG_SIZE, help="Input size for model.")
     parser.add_argument("--conf", type=float, default=CONF_THRESHOLD, help="Confidence threshold.")
     parser.add_argument("--iou", type=float, default=IOU_THRESHOLD, help="NMS IoU threshold.")
     parser.add_argument(
         "--decode",
         choices=("auto", "cpp", "yolov8", "yolov5", "xyxy"),
         default=DECODE_MODE,
-        help=(
-            "Output decode mode. cpp mirrors the ROS2 C++ detector convention; "
-            "yolov8 expects [cx,cy,w,h,cls...]; yolov5 expects [cx,cy,w,h,obj,cls...]; "
-            "xyxy expects [x1,y1,x2,y2,score,class]."
-        ),
+        help="Output decode mode.",
     )
     parser.add_argument(
         "--preprocess",
         choices=("resize", "letterbox"),
         default=PREPROCESS_MODE,
-        help="resize matches the current C++ detector; letterbox often matches YOLO training.",
+        help="Preprocessing mode.",
     )
     parser.add_argument(
         "--classes",
         default=",".join(CLASS_NAMES),
-        help="Comma-separated class names. Default matches config/vision.yaml class ids.",
-    )
-    parser.add_argument(
-        "--save-txt",
-        action="store_true",
-        default=SAVE_TXT,
-        help="Save detections as txt files.",
+        help="Comma-separated class names.",
     )
     parser.add_argument(
         "--show",
@@ -144,9 +224,13 @@ def parse_args() -> argparse.Namespace:
         default=SHOW_RESULT,
         help="Show each result in an OpenCV window.",
     )
+    parser.add_argument(
+        "--delay",
+        type=int,
+        default=0,
+        help="Delay between images in milliseconds (0 = wait for key press).",
+    )
     args = parser.parse_args()
-    if args.source is None and SOURCE_PATH.strip():
-        args.source = Path(SOURCE_PATH)
     return args
 
 
@@ -154,7 +238,10 @@ def collect_images(source: Path) -> list[Path]:
     if source.is_file():
         return [source]
     if source.is_dir():
-        return sorted(p for p in source.rglob("*") if p.suffix.lower() in IMAGE_SUFFIXES)
+        images = sorted(p for p in source.rglob("*") if p.suffix.lower() in IMAGE_SUFFIXES)
+        if not images:
+            print(f"No images found in: {source}", file=sys.stderr)
+        return images
     raise FileNotFoundError(f"Source does not exist: {source}")
 
 
@@ -162,23 +249,6 @@ def static_dim(value: object, fallback: int) -> int:
     if isinstance(value, int) and value > 0:
         return value
     return fallback
-
-
-def make_session(model_path: Path) -> ort.InferenceSession:
-    if not model_path.is_file():
-        raise FileNotFoundError(f"ONNX model does not exist: {model_path}")
-    providers = ["CPUExecutionProvider"]
-    return ort.InferenceSession(str(model_path), providers=providers)
-
-
-def resolve_input_size(session: ort.InferenceSession, fallback: int) -> tuple[str, int, int]:
-    input_meta = session.get_inputs()[0]
-    shape = input_meta.shape
-    if len(shape) != 4:
-        raise ValueError(f"Expected NCHW 4D input, got shape: {shape}")
-    input_h = static_dim(shape[2], fallback)
-    input_w = static_dim(shape[3], fallback)
-    return input_meta.name, input_w, input_h
 
 
 def preprocess_resize(image: np.ndarray, input_w: int, input_h: int) -> tuple[np.ndarray, PreprocessMeta]:
@@ -505,11 +575,9 @@ def draw_detections(
     image: np.ndarray,
     detections: Sequence[Detection],
     class_names: Sequence[str],
-    elapsed_ms: float,
 ) -> np.ndarray:
     canvas = image.copy()
     summary_lines = [
-        f"time: {elapsed_ms:.2f} ms",
         f"detections: {len(detections)}",
     ]
     draw_text_block(canvas, (8, 8), summary_lines, (40, 40, 40), scale=0.58)
@@ -538,44 +606,23 @@ def draw_detections(
     return canvas
 
 
-def save_txt(path: Path, detections: Sequence[Detection], image_w: int, image_h: int) -> None:
-    lines = []
-    for det in detections:
-        x1, y1, x2, y2 = det.box.tolist()
-        cx = ((x1 + x2) * 0.5) / image_w
-        cy = ((y1 + y2) * 0.5) / image_h
-        w = (x2 - x1) / image_w
-        h = (y2 - y1) / image_h
-        if det.xyz is None:
-            xyz = "nan nan nan"
-        else:
-            xyz = f"{det.xyz[0]:.6f} {det.xyz[1]:.6f} {det.xyz[2]:.6f}"
-        lines.append(f"{det.class_id} {det.score:.6f} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f} {xyz}")
-    path.write_text("\n".join(lines), encoding="utf-8")
-
-
-def run_image(
-    session: ort.InferenceSession,
-    input_name: str,
-    image_path: Path,
-    input_w: int,
-    input_h: int,
-    args: argparse.Namespace,
-    class_names: Sequence[str],
-) -> tuple[np.ndarray, list[Detection], float]:
+def detect_image(runner: Runner, image_path: Path, args: argparse.Namespace, class_names: Sequence[str]) -> np.ndarray:
     image = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError(f"Failed to read image: {image_path}")
 
-    start = time.perf_counter()
+    # 预处理
     if args.preprocess == "letterbox":
-        tensor, meta = preprocess_letterbox(image, input_w, input_h)
+        tensor, meta = preprocess_letterbox(image, runner.input_w, runner.input_h)
     else:
-        tensor, meta = preprocess_resize(image, input_w, input_h)
+        tensor, meta = preprocess_resize(image, runner.input_w, runner.input_h)
 
-    outputs = session.run(None, {input_name: tensor})
+    # 推理
+    raw_output = runner.infer(tensor)
+
+    # 后处理
     detections = decode_predictions(
-        outputs[0],
+        raw_output,
         meta=meta,
         conf_thres=args.conf,
         decode_mode=args.decode,
@@ -583,79 +630,93 @@ def run_image(
     )
     detections = nms(detections, args.iou)
     attach_xyz(detections)
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
-    result = draw_detections(image, detections, class_names, elapsed_ms)
-    return result, detections, elapsed_ms
 
-
-def print_model_info(session: ort.InferenceSession, input_w: int, input_h: int) -> None:
-    input_meta = session.get_inputs()[0]
-    output_meta = session.get_outputs()
-    print(f"Model input : {input_meta.name} {input_meta.shape} -> using {input_w}x{input_h}")
-    for item in output_meta:
-        print(f"Model output: {item.name} {item.shape}")
+    # 绘制结果
+    result = draw_detections(image, detections, class_names)
+    
+    # 打印检测信息
+    print(f"\n{image_path.name}: Found {len(detections)} objects")
+    for det in detections:
+        x1, y1, x2, y2 = det.box.tolist()
+        label = class_names[det.class_id] if 0 <= det.class_id < len(class_names) else str(det.class_id)
+        if det.xyz is None:
+            xyz = "xyz=N/A"
+        else:
+            xyz = f"xyz=({det.xyz[0]:.3f},{det.xyz[1]:.3f},{det.xyz[2]:.3f})m"
+        print(f"  {label}: {det.score:.3f}, box=({x1:.1f},{y1:.1f},{x2:.1f},{y2:.1f}), {xyz}")
+    
+    return result
 
 
 def main() -> int:
     args = parse_args()
-    if args.source is None:
-        print(
-            "Please edit SOURCE_PATH at the top of smarthome_vision_ros2/test_last_onnx.py "
-            "or pass an image path once from the terminal.",
-            file=sys.stderr,
-        )
+    
+    if not args.source.exists():
+        print(f"Source does not exist: {args.source}", file=sys.stderr)
         return 1
 
     class_names = [name.strip() for name in args.classes.split(",") if name.strip()]
-    session = make_session(args.model.resolve())
-    input_name, input_w, input_h = resolve_input_size(session, args.imgsz)
     images = collect_images(args.source.resolve())
     if not images:
         print(f"No images found in: {args.source}", file=sys.stderr)
         return 1
 
-    args.output.mkdir(parents=True, exist_ok=True)
-    print_model_info(session, input_w, input_h)
-    print(f"Images: {len(images)}")
-    print(f"Decode: {args.decode}, preprocess: {args.preprocess}, conf: {args.conf}, iou: {args.iou}")
-
-    for image_path in images:
-        result, detections, elapsed_ms = run_image(
-            session=session,
-            input_name=input_name,
-            image_path=image_path,
-            input_w=input_w,
-            input_h=input_h,
-            args=args,
-            class_names=class_names,
+    # 初始化推理后端
+    runners: list[Runner] = []
+    if args.backend in ("onnx", "both"):
+        print("Loading ONNX Runtime backend...")
+        runners.append(ONNXRunner(args.model.resolve(), args.imgsz))
+    if args.backend in ("openvino", "both"):
+        print("Loading OpenVINO backend...")
+        runners.append(
+            OpenVINORunner(
+                args.openvino_model.resolve(),
+                args.openvino_device,
+                args.imgsz,
+            )
         )
-        out_path = args.output / f"{image_path.stem}_det{image_path.suffix}"
-        ok, encoded = cv2.imencode(out_path.suffix, result)
-        if not ok:
-            raise RuntimeError(f"Failed to encode result image: {out_path}")
-        encoded.tofile(str(out_path))
+    
+    if not runners:
+        print("No backend selected.", file=sys.stderr)
+        return 1
 
-        if args.save_txt:
-            save_txt(out_path.with_suffix(".txt"), detections, result.shape[1], result.shape[0])
+    print(f"\nProcessing {len(images)} images...")
+    print(f"Backend: {args.backend}, decode: {args.decode}, preprocess: {args.preprocess}")
+    print(f"Confidence threshold: {args.conf}, IoU threshold: {args.iou}")
+    print("-" * 60)
 
-        print(f"{image_path.name}: {len(detections)} detections, {elapsed_ms:.2f} ms -> {out_path}")
-        for det in detections:
-            x1, y1, x2, y2 = det.box.tolist()
-            label = class_names[det.class_id] if 0 <= det.class_id < len(class_names) else str(det.class_id)
-            if det.xyz is None:
-                xyz = "xyz=N/A"
-            else:
-                xyz = f"xyz=({det.xyz[0]:.3f},{det.xyz[1]:.3f},{det.xyz[2]:.3f})m"
-            print(f"  {label}: {det.score:.3f}, box=({x1:.1f},{y1:.1f},{x2:.1f},{y2:.1f}), {xyz}")
-
-        if args.show:
-            cv2.imshow("last.onnx result", result)
-            key = cv2.waitKey(0)
-            if key in (27, ord("q")):
-                break
+    for i, image_path in enumerate(images, 1):
+        print(f"\n[{i}/{len(images)}] Processing: {image_path.name}")
+        
+        for runner in runners:
+            start_time = time.perf_counter()
+            result_image = detect_image(runner, image_path, args, class_names)
+            inference_time = (time.perf_counter() - start_time) * 1000
+            
+            print(f"  [{runner.name}] Inference time: {inference_time:.2f} ms")
+            
+            if args.show:
+                # 在窗口标题中显示图像名称和后端信息
+                window_title = f"{image_path.name} - {runner.name}"
+                cv2.imshow(window_title, result_image)
+                
+                # 等待按键，如果设置了delay则自动切换
+                key = cv2.waitKey(args.delay)
+                if key in (27, ord('q')):  # ESC 或 q 退出
+                    cv2.destroyAllWindows()
+                    return 0
+                elif key == ord('s'):  # s 保存当前图像
+                    save_path = image_path.parent / f"{image_path.stem}_detected{image_path.suffix}"
+                    cv2.imwrite(str(save_path), result_image)
+                    print(f"    Saved to: {save_path}")
+                
+                cv2.destroyWindow(window_title)
 
     if args.show:
         cv2.destroyAllWindows()
+    
+    print("\n" + "=" * 60)
+    print("Processing complete!")
     return 0
 
 

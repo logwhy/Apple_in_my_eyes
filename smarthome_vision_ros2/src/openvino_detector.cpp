@@ -1,11 +1,10 @@
 #include "smarthome_vision/openvino_detector.hpp"
 
-#include <opencv2/imgproc.hpp>
+#include <openvino/preprocess/pre_post_process.hpp>
 
 #include <algorithm>
 #include <cmath>
-#include <functional>
-#include <numeric>
+#include <cstddef>
 #include <stdexcept>
 
 namespace smarthome_vision
@@ -14,11 +13,7 @@ namespace smarthome_vision
 namespace
 {
 
-size_t shapeSize(const ov::Shape & shape)
-{
-  return std::accumulate(
-    shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
-}
+constexpr size_t kMaxNmsCandidates = 300;
 
 float clampf(float v, float lo, float hi)
 {
@@ -84,6 +79,22 @@ std::vector<RawPrediction> applyNms(
   return output;
 }
 
+std::vector<RawPrediction> limitNmsCandidates(std::vector<RawPrediction> input)
+{
+  if (input.size() <= kMaxNmsCandidates) {
+    return input;
+  }
+
+  auto cutoff = input.begin() + static_cast<std::ptrdiff_t>(kMaxNmsCandidates);
+  std::nth_element(
+    input.begin(), cutoff, input.end(),
+    [](const RawPrediction & a, const RawPrediction & b) {
+      return a.score > b.score;
+    });
+  input.resize(kMaxNmsCandidates);
+  return input;
+}
+
 bool hasDynamicShape(const ov::PartialShape & shape)
 {
   return shape.is_dynamic();
@@ -123,67 +134,59 @@ OpenVINODetector::OpenVINODetector(
   }
 
   const auto input = model->input();
+  const std::string input_name = input.get_any_name();
   if (hasDynamicShape(input.get_partial_shape())) {
-    model->reshape({{input.get_any_name(), ov::PartialShape{
+    model->reshape({{input_name, ov::PartialShape{
       1, 3, input_height_, input_width_}}});
   }
 
-  compiled_model_ = core_.compile_model(model, device_);
-  infer_request_ = compiled_model_.create_infer_request();
-
-  input_shape_ = compiled_model_.input().get_shape();
-  if (input_shape_.size() != 4) {
+  const ov::Shape model_input_shape = model->input().get_shape();
+  if (model_input_shape.size() != 4) {
     throw std::runtime_error("OpenVINO detector input must be 4D NCHW");
   }
-  if (input_shape_[1] != 3) {
+  if (model_input_shape[1] != 3) {
     throw std::runtime_error("OpenVINO detector input must have 3 channels in NCHW layout");
   }
 
-  input_height_ = static_cast<int>(input_shape_[2]);
-  input_width_ = static_cast<int>(input_shape_[3]);
+  input_height_ = static_cast<int>(model_input_shape[2]);
+  input_width_ = static_cast<int>(model_input_shape[3]);
+
+  ov::preprocess::PrePostProcessor ppp(model);
+  ppp.input()
+    .tensor()
+    .set_element_type(ov::element::u8)
+    .set_layout("NHWC")
+    .set_color_format(ov::preprocess::ColorFormat::BGR)
+    .set_spatial_dynamic_shape();
+  ppp.input().model().set_layout("NCHW");
+  ppp.input()
+    .preprocess()
+    .convert_element_type(ov::element::f32)
+    .convert_color(ov::preprocess::ColorFormat::RGB)
+    .resize(ov::preprocess::ResizeAlgorithm::RESIZE_LINEAR)
+    .scale(255.0f);
+  model = ppp.build();
+
+  compiled_model_ = core_.compile_model(
+    model,
+    device_,
+    {ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY)});
+  infer_request_ = compiled_model_.create_infer_request();
 }
 
-void OpenVINODetector::preprocess(
-  const cv::Mat & image,
-  std::vector<float> & input_tensor,
-  float & scale_x,
-  float & scale_y) const
-{
-  scale_x = static_cast<float>(image.cols) / static_cast<float>(input_width_);
-  scale_y = static_cast<float>(image.rows) / static_cast<float>(input_height_);
-
-  cv::Mat resized;
-  cv::resize(image, resized, cv::Size(input_width_, input_height_));
-
-  cv::Mat rgb;
-  cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
-
-  cv::Mat rgb_float;
-  rgb.convertTo(rgb_float, CV_32F, 1.0 / 255.0);
-
-  input_tensor.resize(shapeSize(input_shape_));
-  const int hw = input_width_ * input_height_;
-  std::vector<cv::Mat> chw(3);
-  for (int c = 0; c < 3; ++c) {
-    chw[c] = cv::Mat(input_height_, input_width_, CV_32F, input_tensor.data() + c * hw);
-  }
-  cv::split(rgb_float, chw);
-}
-
-std::vector<float> OpenVINODetector::outputAsFloat(const ov::Tensor & tensor)
+const float * OpenVINODetector::outputDataAsFloat(const ov::Tensor & tensor)
 {
   const size_t count = tensor.get_size();
   if (tensor.get_element_type() == ov::element::f32) {
-    const float * data = tensor.data<const float>();
-    return std::vector<float>(data, data + count);
+    return tensor.data<const float>();
   }
   if (tensor.get_element_type() == ov::element::f16) {
     const ov::float16 * data = tensor.data<const ov::float16>();
-    std::vector<float> out(count);
+    output_buffer_.resize(count);
     for (size_t i = 0; i < count; ++i) {
-      out[i] = static_cast<float>(data[i]);
+      output_buffer_[i] = static_cast<float>(data[i]);
     }
-    return out;
+    return output_buffer_.data();
   }
   throw std::runtime_error("OpenVINO detector output must be FP32 or FP16");
 }
@@ -193,19 +196,33 @@ std::vector<RawPrediction> OpenVINODetector::infer(const cv::Mat & image)
   if (image.empty()) {
     return {};
   }
+  if (image.type() != CV_8UC3) {
+    throw std::runtime_error("OpenVINO detector expects CV_8UC3 BGR input");
+  }
 
-  float scale_x = 1.0f;
-  float scale_y = 1.0f;
-  std::vector<float> input_tensor;
-  preprocess(image, input_tensor, scale_x, scale_y);
+  if (!image.isContinuous()) {
+    image.copyTo(contiguous_image_);
+  }
+  const cv::Mat & input_image = image.isContinuous() ? image : contiguous_image_;
 
-  ov::Tensor tensor(ov::element::f32, input_shape_, input_tensor.data());
+  const float scale_x = static_cast<float>(input_image.cols) / static_cast<float>(input_width_);
+  const float scale_y = static_cast<float>(input_image.rows) / static_cast<float>(input_height_);
+
+  ov::Tensor tensor(
+    ov::element::u8,
+    ov::Shape{
+      1,
+      static_cast<size_t>(input_image.rows),
+      static_cast<size_t>(input_image.cols),
+      3},
+    input_image.data);
   infer_request_.set_input_tensor(tensor);
   infer_request_.infer();
 
   const ov::Tensor output_tensor = infer_request_.get_output_tensor(0);
   const auto output_shape = output_tensor.get_shape();
-  const std::vector<float> output = outputAsFloat(output_tensor);
+  const float * output = outputDataAsFloat(output_tensor);
+  const size_t output_count = output_tensor.get_size();
 
   int num_preds = 0;
   int stride = 0;
@@ -235,7 +252,7 @@ std::vector<RawPrediction> OpenVINODetector::infer(const cv::Mat & image)
     }
   } else {
     stride = output_keypoints_ ? 18 : 6;
-    num_preds = static_cast<int>(output.size() / static_cast<size_t>(stride));
+    num_preds = static_cast<int>(output_count / static_cast<size_t>(stride));
   }
 
   if (stride <= 0 || num_preds <= 0) {
@@ -243,15 +260,15 @@ std::vector<RawPrediction> OpenVINODetector::infer(const cv::Mat & image)
   }
 
   return applyNms(
-    decode(
-      output.data(),
+    limitNmsCandidates(decode(
+      output,
       num_preds,
       stride,
       channels_first,
       scale_x,
       scale_y,
       image.cols,
-      image.rows),
+      image.rows)),
     0.45f);
 }
 

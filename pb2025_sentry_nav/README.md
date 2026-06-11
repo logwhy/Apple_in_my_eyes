@@ -238,9 +238,12 @@ use_robot_state_pub:=True
 
 - 新增 `pb_cuda_pointcloud` 公共包，提供可选 CUDA 点云加速接口，并保留 CPU 回退路径。
 - `point_lio`：ARM64/NX 不再强制 `MP_PROC_NUM=1`；修复 `pbody_list`、`crossmat_list` 只 `reserve` 后按下标写入的越界风险；Livox 点云预处理和 scan 下采样会优先尝试加速接口，失败后自动回到原 CPU/PCL 逻辑。
+- `point_lio` 后端的 IVox 近邻查询与平面关联外层循环启用 OpenMP 并行，利用 NX 多核降低剩余 CPU 延迟；没有改匹配阈值、下采样尺寸或地图更新参数。
+- `point_lio` 的 IVox 地图结构和近邻匹配仍保留在 CPU 侧，避免一次性改动匹配结果；本次主要压低前处理、下采样和旧帧积压带来的延迟。
 - `loam_interface`、`sensor_scan_generation`：整帧 PointCloud2 坐标变换优先尝试加速接口，失败后回到 `pcl_ros::transformPointCloud`。
 - `terrain_analysis`、`terrain_analysis_ext`：地形体素更新中的下采样优先尝试加速接口，失败后回到原 PCL VoxelGrid。
 - `pointcloud_to_laserscan`：SLAM 模式下 PointCloud2 到 LaserScan 的逐点 binning 优先使用公共接口。
+- 代码审查修正：补齐 `pb_cuda_pointcloud` 的 PCL 构建/导出依赖；体素下采样和 LaserScan binning 已补成实际 CUDA kernel；`cuda.enable:=false`、CUDA 编译关闭或设备不可用时，各节点会回到原 PCL/CPU 路径。
 
 没有修改导航速度、RViz 显示、Livox 发布频率、SLAM 地图更新周期、Nav2 controller 频率、local/global costmap 更新频率等参数。
 
@@ -264,6 +267,8 @@ colcon build --packages-select \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DPB_NAV_USE_CUDA=ON -DPB_CUDA_ARCHITECTURES=87
 ```
 
+CUDA 构建需要 CMake 3.18 或更新版本，用于 `CUDAToolkit` 与 `CUDA_ARCHITECTURES`。JetPack 6 / Ubuntu 22.04 默认满足。
+
 `PB_NAV_USE_CUDA=AUTO` 会在发现 CUDA 编译器和 CUDAToolkit 时自动启用，否则走 CPU。
 
 ### 运行开关
@@ -283,7 +288,12 @@ cuda:
 cuda:
   preprocess: true
   downsample: true
+runtime:
+  max_lidar_buffer_size: 3
+  max_imu_buffer_size: 2000
 ```
+
+`runtime.max_lidar_buffer_size` 和 `runtime.max_imu_buffer_size` 只限制 `point_lio` 内部输入队列长度。NX 上如果前端短时间算不过来，会优先丢弃旧点云，保留最新数据，避免机器人已经动了但 SLAM 还在处理陈旧点云造成拖漂；这不改变导航速度、控制频率、地图频率或代价地图参数。设为 `0` 可关闭该队列裁剪。
 
 如需临时排查，可在 launch 时覆盖：
 

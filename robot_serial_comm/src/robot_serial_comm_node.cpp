@@ -1,5 +1,7 @@
 #include <chrono>
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -23,6 +25,7 @@ public:
     const std::string device = declare_parameter<std::string>("serial_device", "/dev/gimbal");
     const int baudrate = declare_parameter<int>("baudrate", 115200);
     const int send_rate_hz = declare_parameter<int>("send_rate_hz", 200);
+    const int reconnect_interval_ms = declare_parameter<int>("reconnect_interval_ms", 1000);
     const std::string cmd_vel_topic = declare_parameter<std::string>("cmd_vel_topic", "cmd_vel");
     const std::string vision_topic =
       declare_parameter<std::string>("vision_topic", "detected_target");
@@ -75,6 +78,11 @@ public:
     const auto rx_period = std::chrono::milliseconds(5);
     rx_timer_ = create_wall_timer(rx_period, [this]() { onReceiveTimer(); });
 
+    const auto reconnect_period = std::chrono::milliseconds(
+      std::max(100, reconnect_interval_ms));
+    reconnect_timer_ =
+      create_wall_timer(reconnect_period, [this]() { onReconnectTimer(); });
+
     RCLCPP_INFO(
       get_logger(),
       "Subscribed cmd_vel: %s, vision: %s, command: %s, publishing mode: %s",
@@ -90,7 +98,10 @@ private:
     }
 
     if (!bridge_->sendPacket()) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Serial send failed");
+      const int send_errno = bridge_->lastSendErrno();
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000, "Serial send failed: %s",
+        send_errno != 0 ? std::strerror(send_errno) : "unknown");
       return;
     }
 
@@ -112,6 +123,23 @@ private:
     }
   }
 
+  void onReconnectTimer()
+  {
+    if (bridge_->isOpened()) {
+      return;
+    }
+
+    if (bridge_->reconnect()) {
+      RCLCPP_INFO(get_logger(), "Serial reconnected");
+      return;
+    }
+
+    const int open_errno = bridge_->lastOpenErrno();
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000, "Serial reconnect failed: %s",
+      open_errno != 0 ? std::strerror(open_errno) : "unknown");
+  }
+
   std::unique_ptr<SerialBridge> bridge_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<smarthome_vision::msg::DetectedTarget>::SharedPtr vision_sub_;
@@ -120,6 +148,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr serial_tx_hex_pub_;
   rclcpp::TimerBase::SharedPtr send_timer_;
   rclcpp::TimerBase::SharedPtr rx_timer_;
+  rclcpp::TimerBase::SharedPtr reconnect_timer_;
 };
 
 }  // namespace robot_serial_comm

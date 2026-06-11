@@ -28,12 +28,6 @@ public:
   std::vector<RawPrediction> infer(const cv::Mat & image) override;
 
 private:
-  void preprocess(
-    const cv::Mat & image,
-    std::vector<float> & input_tensor,
-    float & scale_x,
-    float & scale_y) const;
-
   std::vector<RawPrediction> decode(
     const float * output,
     int num_preds,
@@ -44,7 +38,7 @@ private:
     int image_w,
     int image_h) const;
 
-  std::vector<float> outputAsFloat(const ov::Tensor & tensor);
+  const float * outputDataAsFloat(const ov::Tensor & tensor);
 
 private:
   std::string model_path_;
@@ -58,7 +52,8 @@ private:
   ov::Core core_;
   ov::CompiledModel compiled_model_;
   ov::InferRequest infer_request_;
-  ov::Shape input_shape_;
+  cv::Mat contiguous_image_;
+  std::vector<float> output_buffer_;
 };
 
 }  // namespace smarthome_vision

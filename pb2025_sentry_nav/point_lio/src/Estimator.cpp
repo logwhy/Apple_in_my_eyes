@@ -113,19 +113,19 @@ void h_model_input(
   state_input & s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_R,
   esekfom::dyn_share_modified<double> & ekfom_data)
 {
-  bool match_in_map = false;
-  VF(4) pabcd;
-  pabcd.setZero();
   normvec->resize(time_seq[k]);
   int effect_num_k = 0;
+#ifdef MP_EN
+#pragma omp parallel for num_threads(MP_PROC_NUM) reduction(+ : effect_num_k)
+#endif
   for (int j = 0; j < time_seq[k]; j++) {
+    VF(4) pabcd;
+    pabcd.setZero();
     PointType & point_body_j = feats_down_body->points[idx + j + 1];
     PointType & point_world_j = feats_down_world->points[idx + j + 1];
     pointBodyToWorld(&point_body_j, &point_world_j);
     V3D p_body = pbody_list[idx + j + 1];
     double p_norm = p_body.norm();
-    V3D p_world;
-    p_world << point_world_j.x, point_world_j.y, point_world_j.z;
     {
       auto & points_near = Nearest_Points[idx + j + 1];
       ivox_->GetClosestPoint(point_world_j, points_near, NUM_MATCH_POINTS);  //
@@ -219,19 +219,19 @@ void h_model_output(
   state_output & s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_R,
   esekfom::dyn_share_modified<double> & ekfom_data)
 {
-  bool match_in_map = false;
-  VF(4) pabcd;
-  pabcd.setZero();
   normvec->resize(time_seq[k]);
   int effect_num_k = 0;
+#ifdef MP_EN
+#pragma omp parallel for num_threads(MP_PROC_NUM) reduction(+ : effect_num_k)
+#endif
   for (int j = 0; j < time_seq[k]; j++) {
+    VF(4) pabcd;
+    pabcd.setZero();
     PointType & point_body_j = feats_down_body->points[idx + j + 1];
     PointType & point_world_j = feats_down_world->points[idx + j + 1];
     pointBodyToWorld(&point_body_j, &point_world_j);
     V3D p_body = pbody_list[idx + j + 1];
     double p_norm = p_body.norm();
-    V3D p_world;
-    p_world << point_world_j.x, point_world_j.y, point_world_j.z;
     {
       auto & points_near = Nearest_Points[idx + j + 1];
 

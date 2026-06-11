@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <stdexcept>
 #include <utility>
 
 #include <rclcpp/rclcpp.hpp>
@@ -291,6 +292,90 @@ struct BestTarget
   std::vector<std::pair<Detection, PoseResult>> candidates;
 };
 
+struct VisionTiming
+{
+  double infer_ms = 0.0;
+  double settle_ms = 0.0;
+  double total_ms = 0.0;
+};
+
+void drawResultPanel(
+  cv::Mat & image,
+  const BestTarget & best,
+  const VisionTiming & timing)
+{
+  std::vector<std::string> lines;
+
+  std::ostringstream time_line;
+  time_line << "TIME infer=" << std::fixed << std::setprecision(1) << timing.infer_ms
+            << "ms settle=" << timing.settle_ms
+            << "ms total=" << timing.total_ms << "ms";
+  lines.push_back(time_line.str());
+
+  std::ostringstream result_line;
+  result_line << "RESULT candidates=" << best.candidates.size();
+  if (best.found) {
+    result_line << " best_id=" << best.det.class_id
+                << " score=" << std::fixed << std::setprecision(2) << best.det.score;
+  } else {
+    result_line << " no_target";
+  }
+  lines.push_back(result_line.str());
+
+  if (best.found) {
+    std::ostringstream pose_line;
+    pose_line << "POSE x=" << std::fixed << std::setprecision(3) << best.pose.tvec[0]
+              << " y=" << best.pose.tvec[1]
+              << " z=" << best.pose.tvec[2] << " m";
+    lines.push_back(pose_line.str());
+  }
+
+  const double font_scale = 0.55;
+  const int thickness = 1;
+  const int padding = 8;
+  const int line_gap = 7;
+
+  int baseline = 0;
+  int max_w = 0;
+  int line_h = 0;
+  for (const auto & line : lines) {
+    const cv::Size size =
+      cv::getTextSize(line, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
+    max_w = std::max(max_w, size.width);
+    line_h = std::max(line_h, size.height);
+  }
+
+  const int box_w = std::min(image.cols - 2, max_w + padding * 2);
+  const int box_h = padding * 2 + static_cast<int>(lines.size()) * line_h +
+    static_cast<int>(lines.size() - 1) * line_gap;
+  const int x = 10;
+  const int y = std::max(10, image.rows - box_h - 10);
+
+  cv::rectangle(
+    image,
+    cv::Rect(x, y, std::min(box_w, image.cols - x), std::min(box_h, image.rows - y)),
+    cv::Scalar(0, 0, 0),
+    cv::FILLED);
+  cv::rectangle(
+    image,
+    cv::Rect(x, y, std::min(box_w, image.cols - x), std::min(box_h, image.rows - y)),
+    cv::Scalar(0, 255, 0),
+    1);
+
+  int ty = y + padding + line_h;
+  for (const auto & line : lines) {
+    cv::putText(
+      image,
+      line,
+      cv::Point(x + padding, ty),
+      cv::FONT_HERSHEY_SIMPLEX,
+      font_scale,
+      cv::Scalar(0, 255, 0),
+      thickness);
+    ty += line_h + line_gap;
+  }
+}
+
 bool isBetterTarget(
   const Detection & candidate_det,
   const PoseResult & candidate_pose,
@@ -334,14 +419,17 @@ BestTarget pickBestTarget(
   const std::vector<int> & class_mapping,
   const std::vector<int> & pnp_class_ids,
   int preferred_class_id,
-  bool prefer_nearest_z)
+  bool prefer_nearest_z,
+  VisionTiming * timing)
 {
   BestTarget best;
   if (detector == nullptr || pose_solver == nullptr) {
     return best;
   }
 
+  const auto infer_start = std::chrono::steady_clock::now();
   const std::vector<Detection> raw_dets = detector->infer(image);
+  const auto infer_end = std::chrono::steady_clock::now();
 
   for (auto det : raw_dets) {
     det.class_id = remapClassId(det.class_id, class_mapping);
@@ -367,6 +455,16 @@ BestTarget pickBestTarget(
     }
   }
 
+  const auto settle_end = std::chrono::steady_clock::now();
+  if (timing != nullptr) {
+    timing->infer_ms = std::chrono::duration<double, std::milli>(
+      infer_end - infer_start).count();
+    timing->settle_ms = std::chrono::duration<double, std::milli>(
+      settle_end - infer_end).count();
+    timing->total_ms = std::chrono::duration<double, std::milli>(
+      settle_end - infer_start).count();
+  }
+
   return best;
 }
 
@@ -380,7 +478,9 @@ public:
     declare_parameter<std::string>("image_topic", "/image_raw");
     declare_parameter<std::string>("gimbal_mode_topic", "gimbal_mode");
 
-    declare_parameter<bool>("show_debug", true);
+    declare_parameter<bool>("show_debug", false);
+    declare_parameter<bool>("log_debug_result", true);
+    declare_parameter<int>("debug_view_scale", 2);
     declare_parameter<std::string>("inference_backend", "openvino");
     declare_parameter<std::string>("openvino_device", "CPU");
     declare_parameter<bool>("use_cuda_preprocess", false);
@@ -430,6 +530,7 @@ public:
     declare_parameter<double>("qr_size", 0.05);
 
     show_debug_ = get_parameter("show_debug").as_bool();
+    log_debug_result_ = get_parameter("log_debug_result").as_bool();
     use_local_camera_ = get_parameter("use_local_camera").as_bool();
     camera_device_id_ = get_parameter("camera_device_id").as_int();
     camera_width_ = get_parameter("camera_width").as_int();
@@ -473,44 +574,11 @@ public:
     qr_pose_solver_->set_camera(cam);
     qr_pose_solver_->set_class_size_map(buildSquareSizeMap(qr_model_class_ids_, qr_size));
 
-    const std::string backend = get_parameter("inference_backend").as_string();
-    const std::string openvino_device = get_parameter("openvino_device").as_string();
-    std::string object_model_path = get_parameter("object_model_path").as_string();
-    std::string qr_model_path = get_parameter("qr_model_path").as_string();
-
-    if (object_model_path.empty() && backend == "tensorrt") {
-      object_model_path = get_parameter("object_engine_path").as_string();
-    }
-    if (qr_model_path.empty() && backend == "tensorrt") {
-      qr_model_path = get_parameter("qr_engine_path").as_string();
-    }
-
-    object_detector_ = std::make_unique<Detector>(
-      backend,
-      object_model_path,
-      openvino_device,
-      get_parameter("object_input_width").as_int(),
-      get_parameter("object_input_height").as_int(),
-      static_cast<float>(get_parameter("object_conf_threshold").as_double()),
-      static_cast<float>(get_parameter("object_score_threshold").as_double()),
-      get_parameter("object_output_keypoints").as_bool(),
-      get_parameter("use_cuda_preprocess").as_bool());
-
-    qr_detector_ = std::make_unique<Detector>(
-      backend,
-      qr_model_path,
-      openvino_device,
-      get_parameter("qr_input_width").as_int(),
-      get_parameter("qr_input_height").as_int(),
-      static_cast<float>(get_parameter("qr_conf_threshold").as_double()),
-      static_cast<float>(get_parameter("qr_score_threshold").as_double()),
-      get_parameter("qr_output_keypoints").as_bool(),
-      get_parameter("use_cuda_preprocess").as_bool());
-
     RCLCPP_INFO(
       this->get_logger(),
       "Vision inference backend: %s, device: %s",
-      backend.c_str(), openvino_device.c_str());
+      get_parameter("inference_backend").as_string().c_str(),
+      get_parameter("openvino_device").as_string().c_str());
 
     gimbal_mode_sub_ = create_subscription<std_msgs::msg::UInt8>(
       get_parameter("gimbal_mode_topic").as_string(), 10,
@@ -551,9 +619,7 @@ public:
         camera_device_id_, camera_width_, camera_height_, camera_fps_);
     }
 
-    if (show_debug_) {
-      cv::namedWindow("smarthome_vision_debug", cv::WINDOW_NORMAL);
-    }
+    syncDebugWindow();
 
     RCLCPP_INFO(this->get_logger(), "Vision Node started.");
   }
@@ -563,12 +629,76 @@ public:
     if (cap_.isOpened()) {
       cap_.release();
     }
-    if (show_debug_) {
+    if (debug_window_open_) {
       cv::destroyWindow("smarthome_vision_debug");
     }
   }
 
 private:
+  std::string resolveModelPath(
+    const std::string & model_path_param,
+    const std::string & engine_path_param)
+  {
+    const std::string backend = get_parameter("inference_backend").as_string();
+    std::string model_path = get_parameter(model_path_param).as_string();
+    if (model_path.empty() && backend == "tensorrt") {
+      model_path = get_parameter(engine_path_param).as_string();
+    }
+    return model_path;
+  }
+
+  Detector * ensureObjectDetector()
+  {
+    if (!object_detector_) {
+      const std::string backend = get_parameter("inference_backend").as_string();
+      const std::string model_path = resolveModelPath("object_model_path", "object_engine_path");
+      if (model_path.empty()) {
+        throw std::runtime_error("object_model_path is empty for backend: " + backend);
+      }
+
+      object_detector_ = std::make_unique<Detector>(
+        backend,
+        model_path,
+        get_parameter("openvino_device").as_string(),
+        get_parameter("object_input_width").as_int(),
+        get_parameter("object_input_height").as_int(),
+        static_cast<float>(get_parameter("object_conf_threshold").as_double()),
+        static_cast<float>(get_parameter("object_score_threshold").as_double()),
+        get_parameter("object_output_keypoints").as_bool(),
+        get_parameter("use_cuda_preprocess").as_bool());
+
+      RCLCPP_INFO(this->get_logger(), "Object detector loaded: %s", model_path.c_str());
+    }
+
+    return object_detector_.get();
+  }
+
+  Detector * ensureQrDetector()
+  {
+    if (!qr_detector_) {
+      const std::string backend = get_parameter("inference_backend").as_string();
+      const std::string model_path = resolveModelPath("qr_model_path", "qr_engine_path");
+      if (model_path.empty()) {
+        throw std::runtime_error("qr_model_path is empty for backend: " + backend);
+      }
+
+      qr_detector_ = std::make_unique<Detector>(
+        backend,
+        model_path,
+        get_parameter("openvino_device").as_string(),
+        get_parameter("qr_input_width").as_int(),
+        get_parameter("qr_input_height").as_int(),
+        static_cast<float>(get_parameter("qr_conf_threshold").as_double()),
+        static_cast<float>(get_parameter("qr_score_threshold").as_double()),
+        get_parameter("qr_output_keypoints").as_bool(),
+        get_parameter("use_cuda_preprocess").as_bool());
+
+      RCLCPP_INFO(this->get_logger(), "QR detector loaded: %s", model_path.c_str());
+    }
+
+    return qr_detector_.get();
+  }
+
   uint8_t getCurrentMode()
   {
     const bool use_mode_control = get_parameter("use_mode_control").as_bool();
@@ -628,11 +758,14 @@ private:
 
   void processFrame(const cv::Mat & image, const builtin_interfaces::msg::Time & stamp)
   {
+    syncDebugWindow();
+
     const bool use_test_mode = get_parameter("use_test_mode").as_bool();
     const bool use_mode_control = get_parameter("use_mode_control").as_bool();
     const uint8_t mode = getCurrentMode();
 
     BestTarget best;
+    VisionTiming timing;
 
     if (mode == static_cast<uint8_t>(VisionMode::IDLE)) {
       publishEmptyResult(stamp, mode);
@@ -649,21 +782,23 @@ private:
     if (mode == static_cast<uint8_t>(VisionMode::DETECT_OBJECT)) {
       best = pickBestTarget(
         image,
-        object_detector_.get(),
+        ensureObjectDetector(),
         object_pose_solver_.get(),
         object_model_class_ids_,
         object_pnp_class_ids_,
         target_priority_class_id_,
-        target_prefer_nearest_z_);
+        target_prefer_nearest_z_,
+        &timing);
     } else if (mode == static_cast<uint8_t>(VisionMode::DETECT_QR)) {
       best = pickBestTarget(
         image,
-        qr_detector_.get(),
+        ensureQrDetector(),
         qr_pose_solver_.get(),
         qr_model_class_ids_,
         {},
         -1,
-        target_prefer_nearest_z_);
+        target_prefer_nearest_z_,
+        &timing);
     } else {
       publishEmptyResult(stamp, static_cast<uint8_t>(VisionMode::IDLE));
       return;
@@ -673,6 +808,24 @@ private:
       publishFoundResult(stamp, mode, best.det, best.pose);
     } else {
       publishEmptyResult(stamp, mode);
+    }
+
+    log_debug_result_ = get_parameter("log_debug_result").as_bool();
+    if (log_debug_result_) {
+      if (best.found) {
+        RCLCPP_INFO_THROTTLE(
+          this->get_logger(), *this->get_clock(), 1000,
+          "Vision result: mode=%s candidates=%zu best_id=%d score=%.2f "
+          "xyz=(%.3f, %.3f, %.3f)m infer=%.1fms settle=%.1fms total=%.1fms",
+          modeToString(mode).c_str(), best.candidates.size(), best.det.class_id,
+          best.det.score, best.pose.tvec[0], best.pose.tvec[1], best.pose.tvec[2],
+          timing.infer_ms, timing.settle_ms, timing.total_ms);
+      } else {
+        RCLCPP_INFO_THROTTLE(
+          this->get_logger(), *this->get_clock(), 1000,
+          "Vision result: mode=%s candidates=0 no_target infer=%.1fms settle=%.1fms total=%.1fms",
+          modeToString(mode).c_str(), timing.infer_ms, timing.settle_ms, timing.total_ms);
+      }
     }
 
     if (show_debug_) {
@@ -690,8 +843,10 @@ private:
       }
 
       drawModeBanner(vis, mode, best.found, use_mode_control, use_test_mode, use_local_camera_);
+      drawResultPanel(vis, best, timing);
 
-      const int scale = 2;
+      const int scale = static_cast<int>(
+        std::clamp<int64_t>(get_parameter("debug_view_scale").as_int(), 1, 4));
       cv::Mat vis_big;
       cv::resize(
         vis,
@@ -740,6 +895,19 @@ private:
     processFrame(frame, nowAsBuiltinTime());
   }
 
+  void syncDebugWindow()
+  {
+    const bool desired = get_parameter("show_debug").as_bool();
+    if (desired && !debug_window_open_) {
+      cv::namedWindow("smarthome_vision_debug", cv::WINDOW_NORMAL);
+      debug_window_open_ = true;
+    } else if (!desired && debug_window_open_) {
+      cv::destroyWindow("smarthome_vision_debug");
+      debug_window_open_ = false;
+    }
+    show_debug_ = desired;
+  }
+
 private:
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_;
   rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr gimbal_mode_sub_;
@@ -755,7 +923,9 @@ private:
 
   cv::VideoCapture cap_;
 
-  bool show_debug_ = true;
+  bool show_debug_ = false;
+  bool debug_window_open_ = false;
+  bool log_debug_result_ = true;
   bool use_local_camera_ = true;
   int camera_device_id_ = 0;
   int camera_width_ = 640;

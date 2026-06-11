@@ -41,6 +41,7 @@ string prior_pcd_map_path;
 std::vector<double> init_pose;
 bool cuda_enable = true, cuda_preprocess = true, cuda_downsample = true, cuda_profile = false;
 int cuda_device_id = 0;
+int runtime_max_lidar_buffer_size = 3, runtime_max_imu_buffer_size = 2000;
 
 double lidar_time_inte = 0.1, first_imu_time = 0.0;
 int cut_frame_num = 1, orig_odom_freq = 10;
@@ -85,6 +86,12 @@ void readParameters(std::shared_ptr<rclcpp::Node> & nh)
 
     nh->declare_parameter<bool>("cuda.downsample", true);
     nh->get_parameter("cuda.downsample", cuda_downsample);
+
+    nh->declare_parameter<int>("runtime.max_lidar_buffer_size", 3);
+    nh->get_parameter("runtime.max_lidar_buffer_size", runtime_max_lidar_buffer_size);
+
+    nh->declare_parameter<int>("runtime.max_imu_buffer_size", 2000);
+    nh->get_parameter("runtime.max_imu_buffer_size", runtime_max_imu_buffer_size);
 
     nh->declare_parameter<double>("mapping.satu_acc", 3.0);
     nh->get_parameter("mapping.satu_acc", satu_acc);

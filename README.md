@@ -534,6 +534,10 @@ ros2 topic echo /serial_tx_hex
 
 `cuda` 分支在 `pb2025_sentry_nav` 中新增了 `pb_cuda_pointcloud` 公共点云加速包，面向 Jetson Orin NX / CUDA 12.6 / `sm_87`。本次只加速点云预处理、点云变换、地形体素下采样和 SLAM 点云转 LaserScan 等 CPU 热点，不修改导航速度、RViz 显示、地图计算频率、Nav2 controller 或 costmap 参数。
 
+最新代码审查已补齐 PCL/CUDA 构建依赖、实际 CUDA 体素/LaserScan kernel，以及 CUDA 失败时的原 CPU/PCL 回退说明。
+
+针对 NX CPU 过载导致点云拖漂的场景，`point_lio` 还新增了内部输入队列防积压保护，过载时保留最新点云而不是一直追旧帧；详细参数仍在导航 README。
+
 详细构建、开关和真机检查方式见：
 
 ```text

@@ -80,6 +80,7 @@ extern string prior_pcd_map_path;
 extern std::vector<double> init_pose;
 extern bool cuda_enable, cuda_preprocess, cuda_downsample, cuda_profile;
 extern int cuda_device_id;
+extern int runtime_max_lidar_buffer_size, runtime_max_imu_buffer_size;
 
 extern MeasureGroup Measures;
 
