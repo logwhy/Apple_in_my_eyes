@@ -27,9 +27,13 @@ smarthome_vision_node:
       0.000000, 0.000000, 1.000000
     ]
     dist_coeffs: [-0.046451, 0.085529, 0.001981, 0.006941, 0.000000]
+    # Added to the final camera-frame pose before publishing: [x, y, z] in meters.
+    pose_offset_xyz: [0.0, 0.0, 0.0]
 
     # Object class ids: red=0, yellow=1, green=2.
-    # class_sizes are width/height pairs in meters, in the same order.
+    # class_sizes are real width/height pairs in meters, in the same order.
+    # Object pose now uses bbox center + these real sizes for distance estimation.
+    # For near-round apples, set width and height to the same measured diameter.
     class_names: [0, 1, 2]
     class_sizes: [
       0.083, 0.073,

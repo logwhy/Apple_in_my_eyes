@@ -78,6 +78,14 @@ bool classAllowed(int class_id, const std::vector<int> & allowed_class_ids)
          allowed_class_ids.end();
 }
 
+cv::Vec3d vec3FromParam(const std::vector<double> & values)
+{
+  if (values.size() < 3) {
+    return cv::Vec3d(0.0, 0.0, 0.0);
+  }
+  return cv::Vec3d(values[0], values[1], values[2]);
+}
+
 std::map<int, cv::Size2f> buildSizeMap(
   const std::vector<int> & class_ids,
   const std::vector<double> & class_sizes)
@@ -420,6 +428,8 @@ BestTarget pickBestTarget(
   const std::vector<int> & pnp_class_ids,
   int preferred_class_id,
   bool prefer_nearest_z,
+  bool use_center_size_pose,
+  const cv::Vec3d & pose_offset,
   VisionTiming * timing)
 {
   BestTarget best;
@@ -437,10 +447,13 @@ BestTarget pickBestTarget(
       continue;
     }
 
-    const PoseResult pose = pose_solver->solve(det);
+    PoseResult pose = use_center_size_pose ?
+      pose_solver->solve_by_center_size(det) :
+      pose_solver->solve(det);
     if (!pose.success) {
       continue;
     }
+    pose.tvec += pose_offset;
 
     const size_t candidate_index = best.candidates.size();
     best.candidates.push_back({det, pose});
@@ -517,6 +530,7 @@ public:
       "camera_matrix",
       {800.0, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0});
     declare_parameter<std::vector<double>>("dist_coeffs", {0.0, 0.0, 0.0, 0.0, 0.0});
+    declare_parameter<std::vector<double>>("pose_offset_xyz", {0.0, 0.0, 0.0});
 
     declare_parameter<std::vector<long int>>("class_names", std::vector<long int>{0, 1, 2});
     declare_parameter<std::vector<double>>(
@@ -714,6 +728,11 @@ private:
     return gimbal_mode_;
   }
 
+  cv::Vec3d getPoseOffset() const
+  {
+    return vec3FromParam(get_parameter("pose_offset_xyz").as_double_array());
+  }
+
   builtin_interfaces::msg::Time nowAsBuiltinTime() const
   {
     return this->now();
@@ -763,6 +782,7 @@ private:
     const bool use_test_mode = get_parameter("use_test_mode").as_bool();
     const bool use_mode_control = get_parameter("use_mode_control").as_bool();
     const uint8_t mode = getCurrentMode();
+    const cv::Vec3d pose_offset = getPoseOffset();
 
     BestTarget best;
     VisionTiming timing;
@@ -788,6 +808,8 @@ private:
         object_pnp_class_ids_,
         target_priority_class_id_,
         target_prefer_nearest_z_,
+        true,
+        pose_offset,
         &timing);
     } else if (mode == static_cast<uint8_t>(VisionMode::DETECT_QR)) {
       best = pickBestTarget(
@@ -798,6 +820,8 @@ private:
         {},
         -1,
         target_prefer_nearest_z_,
+        false,
+        pose_offset,
         &timing);
     } else {
       publishEmptyResult(stamp, static_cast<uint8_t>(VisionMode::IDLE));

@@ -17,6 +17,7 @@ public:
   void set_class_size_map(const std::map<int, cv::Size2f> & class_size_map);
 
   PoseResult solve(const Detection & det) const;
+  PoseResult solve_by_center_size(const Detection & det) const;
 
 private:
   CameraIntrinsics camera_;

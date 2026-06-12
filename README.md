@@ -530,6 +530,50 @@ ros2 topic echo /serial_tx_hex
 - 上位机在扫描、采摘、倾倒时会尽量保证底盘速度为 0。
 - 所有采摘点完成后，必须去最终点执行倾倒，除非 `use_final_goal=false`。
 
+## smarthome_vision_ros2 编译后端选择
+
+`smarthome_vision_ros2` 的推理后端在编译时由 CMake 选项决定：
+
+| 后端 | CMake 选项 | 适用环境 | 额外依赖 |
+| --- | --- | --- | --- |
+| OpenVINO | `-DSMARTHOME_VISION_WITH_OPENVINO=ON` | NUC / CPU 推理 / 无 CUDA 平台 | OpenVINO Runtime |
+| TensorRT | `-DSMARTHOME_VISION_WITH_TENSORRT=ON` | Jetson / NVIDIA GPU 推理 | CUDA、TensorRT、OpenCV CUDA 模块 |
+
+默认配置是：
+
+```text
+SMARTHOME_VISION_WITH_OPENVINO=ON
+SMARTHOME_VISION_WITH_TENSORRT=OFF
+```
+
+NUC 或没有完整 CUDA/OpenCV CUDA 环境时，推荐显式关闭 TensorRT：
+
+```bash
+colcon build --packages-select smarthome_vision \
+  --cmake-args \
+  -DSMARTHOME_VISION_WITH_OPENVINO=ON \
+  -DSMARTHOME_VISION_WITH_TENSORRT=OFF
+```
+
+Jetson Orin NX 等需要 TensorRT 推理时，打开 TensorRT。可以只开 TensorRT，也可以同时保留 OpenVINO：
+
+```bash
+colcon build --packages-select smarthome_vision \
+  --cmake-args \
+  -DSMARTHOME_VISION_WITH_OPENVINO=OFF \
+  -DSMARTHOME_VISION_WITH_TENSORRT=ON
+```
+
+如果编译时报 `cudaarithm`、`cudaimgproc`、`cudawarping` 缺失，通常说明当前构建打开了 TensorRT，但本机 OpenCV 没有 CUDA 模块；清理 `build/smarthome_vision` 和 `install/smarthome_vision` 后，按 OpenVINO-only 方式重新编译。
+
+运行时还要和 `smarthome_vision_ros2/config/vision.yaml` 中的 `inference_backend` 对齐：
+
+```yaml
+inference_backend: "openvino"   # 使用 OpenVINO 编译后端
+# inference_backend: "tensorrt" # 使用 TensorRT 编译后端
+```
+详情可见smarthome_vision_ros2下的readme文件
+
 ## Jetson Orin NX CUDA 导航加速入口
 
 `cuda` 分支在 `pb2025_sentry_nav` 中新增了 `pb_cuda_pointcloud` 公共点云加速包，面向 Jetson Orin NX / CUDA 12.6 / `sm_87`。本次只加速点云预处理、点云变换、地形体素下采样和 SLAM 点云转 LaserScan 等 CPU 热点，不修改导航速度、RViz 显示、地图计算频率、Nav2 controller 或 costmap 参数。
