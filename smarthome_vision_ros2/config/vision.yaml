@@ -36,11 +36,27 @@ smarthome_vision_node:
       0.060, 0.050,
       0.083, 0.073
     ]
+    # Circle-radius pose mode uses one real fruit radius per class, in meters.
+    # Keep the order aligned with class_names. If empty, radius falls back to (width + height) / 4.
+    class_radii: [
+      0.02125,
+      0.02750,
+      0.03900
+    ]
 
     object_input_width: 640
     object_input_height: 640
     object_conf_threshold: 0.5
     object_score_threshold: 0.5
+    # Pose settlement method for object detections:
+    #   circle_radius: use bbox center + pixel radius + class_radii.
+    #   bbox_pnp: original 4-corner box PnP.
+    object_pose_method: "circle_radius"
+    circle_radius_scale: 1.0
+    # Manual offset added to the published /detected_target xyz before robot_serial_comm sends it.
+    target_offset_x: 0.0
+    target_offset_y: 0.0
+    target_offset_z: 0.0
     # Multi-target selection: prefer red(class 0), then nearer z, then smaller lateral x/y.
     target_priority_class_id: 0
     target_prefer_nearest_z: true

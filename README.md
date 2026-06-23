@@ -114,6 +114,41 @@ detected_target
 | `y` | 目标在相机坐标系下的 y，向下为正，单位 m。 |
 | `z` | 目标在相机坐标系下的 z，向前为正，单位 m。 |
 
+### 视觉增量：offset 与圆心半径结算
+
+视觉节点现在支持在发布给下位机前给目标坐标加人工 offset。参数位于：
+
+```text
+smarthome_vision_ros2/config/vision.yaml
+```
+
+```yaml
+target_offset_x: 0.0
+target_offset_y: 0.0
+target_offset_z: 0.0
+```
+
+单位是 m，方向仍然是相机坐标系。`/detected_target` 中看到的 `x/y/z` 已经是加过 offset 的值，`robot_serial_comm` 会继续把它写进 `SP` 串口帧。
+
+物体结算方法也新增了可切换参数：
+
+```yaml
+object_pose_method: "circle_radius"
+class_radii: [0.02125, 0.02750, 0.03900]
+circle_radius_scale: 1.0
+```
+
+- `circle_radius`：新方法，使用检测框圆心 + 像素半径 + 真实果子半径估算 xyz。
+- `bbox_pnp`：旧方法，使用检测框四角点做 PnP。
+
+如果需要切回原有逻辑，把配置改成：
+
+```yaml
+object_pose_method: "bbox_pnp"
+```
+
+`class_radii` 的顺序要和 `class_names` 一致，单位 m。实车标定时优先改真实半径；如果所有距离都整体偏远/偏近，再微调 `circle_radius_scale`。
+
 Windows 下测试模型的脚本：
 
 ```text

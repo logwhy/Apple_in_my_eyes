@@ -94,6 +94,30 @@ std::map<int, cv::Size2f> buildSizeMap(
   return out;
 }
 
+std::map<int, float> buildRadiusMap(
+  const std::vector<int> & class_ids,
+  const std::vector<double> & class_sizes,
+  const std::vector<double> & class_radii)
+{
+  std::map<int, float> out;
+  for (size_t i = 0; i < class_ids.size(); ++i) {
+    if (i < class_radii.size() && class_radii[i] > 0.0) {
+      out[class_ids[i]] = static_cast<float>(class_radii[i]);
+      continue;
+    }
+
+    const size_t idx = i * 2;
+    if (idx + 1 < class_sizes.size()) {
+      const double w = class_sizes[idx];
+      const double h = class_sizes[idx + 1];
+      if (w > 0.0 && h > 0.0) {
+        out[class_ids[i]] = static_cast<float>((w + h) * 0.25);
+      }
+    }
+  }
+  return out;
+}
+
 std::map<int, cv::Size2f> buildSquareSizeMap(
   const std::vector<int> & class_ids,
   float side_len)
@@ -502,8 +526,13 @@ public:
     declare_parameter<std::string>("object_model_path", "");
     declare_parameter<std::string>("object_engine_path", "");
     declare_parameter<bool>("object_output_keypoints", false);
+    declare_parameter<std::string>("object_pose_method", "circle_radius");
+    declare_parameter<double>("circle_radius_scale", 1.0);
     declare_parameter<int>("target_priority_class_id", 0);
     declare_parameter<bool>("target_prefer_nearest_z", true);
+    declare_parameter<double>("target_offset_x", 0.0);
+    declare_parameter<double>("target_offset_y", 0.0);
+    declare_parameter<double>("target_offset_z", 0.0);
 
     declare_parameter<int>("qr_input_width", 640);
     declare_parameter<int>("qr_input_height", 640);
@@ -522,6 +551,7 @@ public:
     declare_parameter<std::vector<double>>(
       "class_sizes",
       std::vector<double>{0.083, 0.073, 0.060, 0.050, 0.083, 0.073});
+    declare_parameter<std::vector<double>>("class_radii", std::vector<double>{});
 
     declare_parameter<std::vector<long int>>("object_model_class_ids", std::vector<long int>{0, 1, 2});
     declare_parameter<std::vector<long int>>("object_pnp_class_ids", std::vector<long int>{0, 1});
@@ -538,11 +568,15 @@ public:
     camera_fps_ = get_parameter("camera_fps").as_int();
     target_priority_class_id_ = get_parameter("target_priority_class_id").as_int();
     target_prefer_nearest_z_ = get_parameter("target_prefer_nearest_z").as_bool();
+    target_offset_[0] = get_parameter("target_offset_x").as_double();
+    target_offset_[1] = get_parameter("target_offset_y").as_double();
+    target_offset_[2] = get_parameter("target_offset_z").as_double();
 
     auto k = get_parameter("camera_matrix").as_double_array();
     auto d = get_parameter("dist_coeffs").as_double_array();
     auto class_names_ll = get_parameter("class_names").as_integer_array();
     auto class_sizes = get_parameter("class_sizes").as_double_array();
+    auto class_radii = get_parameter("class_radii").as_double_array();
     auto obj_map_ll = get_parameter("object_model_class_ids").as_integer_array();
     auto obj_pnp_ll = get_parameter("object_pnp_class_ids").as_integer_array();
     auto qr_map_ll = get_parameter("qr_model_class_ids").as_integer_array();
@@ -568,6 +602,9 @@ public:
     object_pose_solver_ = std::make_unique<PoseSolver>();
     object_pose_solver_->set_camera(cam);
     object_pose_solver_->set_class_size_map(buildSizeMap(class_names_, class_sizes));
+    object_pose_solver_->set_class_radius_map(buildRadiusMap(class_names_, class_sizes, class_radii));
+    object_pose_solver_->set_pose_method(get_parameter("object_pose_method").as_string());
+    object_pose_solver_->set_circle_radius_scale(get_parameter("circle_radius_scale").as_double());
 
     const float qr_size = static_cast<float>(get_parameter("qr_size").as_double());
     qr_pose_solver_ = std::make_unique<PoseSolver>();
@@ -579,6 +616,11 @@ public:
       "Vision inference backend: %s, device: %s",
       get_parameter("inference_backend").as_string().c_str(),
       get_parameter("openvino_device").as_string().c_str());
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Object pose method: %s, target offset xyz=(%.3f, %.3f, %.3f)m",
+      get_parameter("object_pose_method").as_string().c_str(),
+      target_offset_[0], target_offset_[1], target_offset_[2]);
 
     gimbal_mode_sub_ = create_subscription<std_msgs::msg::UInt8>(
       get_parameter("gimbal_mode_topic").as_string(), 10,
@@ -745,9 +787,9 @@ private:
     out.tracking = true;
     out.class_id = det.class_id;
     out.score = det.score;
-    out.x = static_cast<float>(pose.tvec[0]);
-    out.y = static_cast<float>(pose.tvec[1]);
-    out.z = static_cast<float>(pose.tvec[2]);
+    out.x = static_cast<float>(pose.tvec[0] + target_offset_[0]);
+    out.y = static_cast<float>(pose.tvec[1] + target_offset_[1]);
+    out.z = static_cast<float>(pose.tvec[2] + target_offset_[2]);
     out.corners_uv.resize(8);
     for (int i = 0; i < 4; ++i) {
       out.corners_uv[2 * i] = det.corners[i].x;
@@ -933,6 +975,7 @@ private:
   int camera_fps_ = 30;
   int target_priority_class_id_ = 0;
   bool target_prefer_nearest_z_ = true;
+  std::array<double, 3> target_offset_{0.0, 0.0, 0.0};
 
   std::vector<int> class_names_;
   std::vector<int> object_model_class_ids_;
